@@ -51,5 +51,7 @@ def size_table_to_contents(table, max_visible_rows=None):
     visible_rows = min(row_count, max_visible_rows) if max_visible_rows else row_count
     row_height = table.verticalHeader().defaultSectionSize()
     header_height = table.horizontalHeader().height() or 32
-    total = header_height + visible_rows * row_height + 6
+    # Altura real de cada fila: algunas tablas ajustan filas de varios renglones.
+    filas = sum(table.rowHeight(r) for r in range(visible_rows))
+    total = header_height + filas + 6
     table.setMinimumHeight(max(total, header_height + row_height))

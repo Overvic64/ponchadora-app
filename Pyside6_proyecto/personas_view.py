@@ -1,11 +1,19 @@
 """Pantalla generica de personas (maestros): se reutiliza para 'Profesores'
 (PTC + Asignatura) y 'Administrativos' (Administrativo), filtrando por tipo.
+
+Los empleados que todavia no tienen tipo aparecen en ambas pantallas,
+marcados como "Sin clasificar", para que se les pueda asignar desde aqui.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -20,9 +28,79 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from store import EDIFICIOS, TURNOS, store
+from store import EDIFICIOS, TIPOS_PERSONAL, TURNOS, store
 from theme import COLORS
 from widgets import size_table_to_contents
+
+SIN_TURNO = "Sin turno"
+SIN_TIPO = "Sin clasificar"
+
+
+class EditarPersonaDialog(QDialog):
+    def __init__(self, persona, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Editar — {persona.nombre}")
+        self.setMinimumWidth(420)
+
+        self.nombre_input = QLineEdit(persona.nombre)
+        self.codigo_input = QLineEdit(persona.codigo or "")
+
+        self.tipo_combo = QComboBox()
+        self.tipo_combo.addItem(SIN_TIPO)
+        self.tipo_combo.addItems(TIPOS_PERSONAL)
+        self.tipo_combo.setCurrentText(persona.tipo_personal or SIN_TIPO)
+
+        self.edificio_combo = QComboBox()
+        self.edificio_combo.addItems(EDIFICIOS)
+        self.edificio_combo.setCurrentText(persona.edificio)
+
+        self.area_input = QLineEdit(persona.area_carrera or "")
+        self.area_input.setPlaceholderText("Área / Dirección / Carrera")
+
+        self.turno_combo = QComboBox()
+        self.turno_combo.addItem(SIN_TURNO)
+        self.turno_combo.addItems([t.capitalize() for t in TURNOS.keys()])
+        self.turno_combo.setCurrentText(persona.turno.capitalize() if persona.turno else SIN_TURNO)
+
+        self.activo_check = QCheckBox("Sigue trabajando aquí (si lo desmarcas, deja de contar faltas)")
+        self.activo_check.setChecked(persona.activo)
+
+        form = QFormLayout()
+        form.addRow("Nombre", self.nombre_input)
+        form.addRow("Código del lector", self.codigo_input)
+        form.addRow("Tipo de personal", self.tipo_combo)
+        form.addRow("Edificio asignado", self.edificio_combo)
+        form.addRow("Área / Carrera", self.area_input)
+        form.addRow("Turno", self.turno_combo)
+        form.addRow("Activo", self.activo_check)
+
+        botones = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        botones.accepted.connect(self._validar)
+        botones.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(botones)
+
+    def _validar(self):
+        if not self.nombre_input.text().strip() or not self.codigo_input.text().strip():
+            QMessageBox.warning(self, "Datos incompletos", "El nombre y el código no pueden quedar vacíos.")
+            return
+        self.accept()
+
+    def valores(self) -> dict:
+        tipo = self.tipo_combo.currentText()
+        turno = self.turno_combo.currentText()
+        return {
+            "nombre": self.nombre_input.text().strip(),
+            "codigo": self.codigo_input.text().strip(),
+            "tipo_personal": None if tipo == SIN_TIPO else tipo,
+            "edificio": self.edificio_combo.currentText(),
+            "area_carrera": self.area_input.text().strip() or None,
+            "turno": None if turno == SIN_TURNO else turno.lower(),
+            "turno_confirmado": turno != SIN_TURNO,
+            "activo": self.activo_check.isChecked(),
+        }
 
 
 class PersonasView(QWidget):
@@ -104,13 +182,33 @@ class PersonasView(QWidget):
         list_layout.setContentsMargins(18, 16, 18, 16)
         list_layout.setSpacing(10)
 
+        list_header = QHBoxLayout()
         list_title = QLabel(f"👥  {titulo} registrados")
         list_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        list_layout.addWidget(list_title)
+        list_header.addWidget(list_title)
+        list_header.addStretch()
 
-        self.table = QTableWidget(0, 7)
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("🔍  Buscar por nombre o código...")
+        self.search_box.setObjectName("searchBoxLight")
+        self.search_box.setFixedWidth(240)
+        self.search_box.textChanged.connect(lambda _: self.refresh())
+        list_header.addWidget(self.search_box)
+
+        self.filtro_combo = QComboBox()
+        self.filtro_combo.addItems(["Todos", "Solo sin clasificar"])
+        self.filtro_combo.currentIndexChanged.connect(lambda _: self.refresh())
+        list_header.addWidget(self.filtro_combo)
+        list_layout.addLayout(list_header)
+
+        self.pendientes_label = QLabel("")
+        self.pendientes_label.setStyleSheet(f"color: {COLORS['orange']}; font-size: 11px; font-weight: 600;")
+        self.pendientes_label.setWordWrap(True)
+        list_layout.addWidget(self.pendientes_label)
+
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["Nombre", "Código", "Tipo", "Edificio", "Área / Carrera", "Turno", ""]
+            ["Nombre", "Código", "Tipo", "Edificio", "Área / Carrera", "Turno", "", ""]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -119,6 +217,9 @@ class PersonasView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        for col, width in ((6, 76), (7, 44)):
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.Fixed)
+            self.table.setColumnWidth(col, width)
         self.table.verticalHeader().setDefaultSectionSize(34)
         list_layout.addWidget(self.table)
 
@@ -138,14 +239,18 @@ class PersonasView(QWidget):
         if not nombre:
             QMessageBox.warning(self, "Falta el nombre", "Escribe el nombre completo del empleado.")
             return
-        store.add_maestro(
-            codigo=self.codigo_input.text().strip(),
-            nombre=nombre,
-            tipo_personal=self.tipo_combo.currentText(),
-            edificio=self.edificio_combo.currentText(),
-            area_carrera=self.area_input.text().strip() or "General",
-            turno=self.turno_combo.currentText().lower(),
-        )
+        try:
+            store.add_maestro(
+                codigo=self.codigo_input.text().strip(),
+                nombre=nombre,
+                tipo_personal=self.tipo_combo.currentText(),
+                edificio=self.edificio_combo.currentText(),
+                area_carrera=self.area_input.text().strip() or "General",
+                turno=self.turno_combo.currentText().lower(),
+            )
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "Error al guardar", str(error))
+            return
         self.nombre_input.clear()
         self.codigo_input.clear()
         self.area_input.clear()
@@ -156,27 +261,76 @@ class PersonasView(QWidget):
             self, "Eliminar", "¿Eliminar este registro? Esta acción no se puede deshacer."
         )
         if confirm == QMessageBox.Yes:
-            store.remove_maestro(maestro_id)
+            try:
+                store.remove_maestro(maestro_id)
+            except Exception as error:  # noqa: BLE001 - ej. tiene incidencias/asistencias asociadas
+                QMessageBox.critical(self, "No se pudo eliminar", str(error))
+                return
             self.refresh()
 
+    def _editar(self, maestro_id):
+        persona = next((m for m in store.maestros if m.id == maestro_id), None)
+        if persona is None:
+            return
+        dialog = EditarPersonaDialog(persona, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        try:
+            store.update_maestro(maestro_id, **dialog.valores())
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "Error al guardar", str(error))
+            return
+        self.refresh()
+
     def refresh(self):
-        personas = store.maestros_por_tipo(self.tipos_permitidos)
+        sin_clasificar = [m for m in store.maestros if not m.tipo_personal]
+        personas = store.maestros_por_tipo(self.tipos_permitidos) + sin_clasificar
+        if self.filtro_combo.currentText() == "Solo sin clasificar":
+            personas = sin_clasificar
+        busqueda = self.search_box.text().strip().lower()
+        if busqueda:
+            personas = [p for p in personas if busqueda in p.nombre.lower() or busqueda in (p.codigo or "").lower()]
+        personas.sort(key=lambda p: (p.tipo_personal is not None, p.nombre.lower()))
+
+        if sin_clasificar:
+            self.pendientes_label.setText(
+                f"⚠️  {len(sin_clasificar)} empleado(s) sin tipo de personal. Aparecen aquí y en la otra "
+                "pantalla de personal hasta que los clasifiques con \"Editar\"."
+            )
+        self.pendientes_label.setVisible(bool(sin_clasificar))
+
         self.table.setRowCount(len(personas))
         for row, persona in enumerate(personas):
             values = [
                 persona.nombre,
                 persona.codigo,
-                persona.tipo_personal,
+                persona.tipo_personal or SIN_TIPO,
                 persona.edificio,
-                persona.area_carrera,
-                persona.turno.capitalize(),
+                persona.area_carrera or "-",
+                persona.turno.capitalize() if persona.turno else "-",
             ]
             for col, value in enumerate(values):
-                self.table.setItem(row, col, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if col == 2 and not persona.tipo_personal:
+                    item.setForeground(QColor(COLORS["orange"]))
+                    font = QFont()
+                    font.setBold(True)
+                    item.setFont(font)
+                self.table.setItem(row, col, item)
+
+            edit_btn = QPushButton("Editar")
+            edit_btn.setObjectName("tableButton")
+            edit_btn.setCursor(Qt.PointingHandCursor)
+            edit_btn.setFixedWidth(64)
+            edit_btn.setToolTip("Editar / clasificar")
+            edit_btn.clicked.connect(lambda _, pid=persona.id: self._editar(pid))
+            self.table.setCellWidget(row, 6, edit_btn)
 
             delete_btn = QPushButton("🗑")
+            delete_btn.setObjectName("tableButton")
             delete_btn.setCursor(Qt.PointingHandCursor)
             delete_btn.setFixedWidth(32)
+            delete_btn.setToolTip("Eliminar")
             delete_btn.clicked.connect(lambda _, pid=persona.id: self._eliminar(pid))
-            self.table.setCellWidget(row, 6, delete_btn)
+            self.table.setCellWidget(row, 7, delete_btn)
         size_table_to_contents(self.table)

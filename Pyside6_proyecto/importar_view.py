@@ -1,5 +1,5 @@
-"""Pantalla 'Importar Excel': sube el archivo de ponchadas, lo depura y
-muestra una vista previa antes de (mas adelante) enviarlo a Supabase."""
+"""Pantalla 'Importar Excel': sube el archivo de ponchadas, lo depura,
+muestra una vista previa y lo envia a Supabase."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,10 +7,12 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -21,11 +23,12 @@ from PySide6.QtWidgets import (
 )
 
 from core.attendance_import import CleaningResult, InputFileError, process_attendance_file
-from store import store
+from store import EDIFICIOS, store
 from theme import COLORS
 from widgets import StatCard
 
 MAX_PREVIEW_ROWS = 300
+ORIGEN_GLOBAL = "No especificado (archivo global)"
 
 
 class DropZone(QFrame):
@@ -139,6 +142,7 @@ class ImportarExcelView(QWidget):
         super().__init__(parent)
         self.result: CleaningResult | None = None
         self.current_path: Path | None = None
+        self.current_origin: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 24)
@@ -193,10 +197,23 @@ class ImportarExcelView(QWidget):
         self.export_btn.clicked.connect(self._export_result)
         results_header.addWidget(self.export_btn)
 
-        self.supabase_btn = QPushButton("☁  Enviar a Supabase (próximamente)")
+        origen_label = QLabel("Ponchador de origen:")
+        origen_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        results_header.addWidget(origen_label)
+        self.origen_combo = QComboBox()
+        self.origen_combo.addItem(ORIGEN_GLOBAL)
+        self.origen_combo.addItems(EDIFICIOS)
+        self.origen_combo.setToolTip(
+            "Edificio del lector de donde salió el archivo. Si el archivo junta varios "
+            "lectores, deja 'No especificado': el edificio de cada empleado se toma de su "
+            "registro, no del lector."
+        )
+        results_header.addWidget(self.origen_combo)
+
+        self.supabase_btn = QPushButton("☁  Enviar a Supabase")
         self.supabase_btn.setObjectName("primaryButton")
         self.supabase_btn.setCursor(Qt.PointingHandCursor)
-        self.supabase_btn.setEnabled(False)
+        self.supabase_btn.clicked.connect(self._enviar_supabase)
         results_header.addWidget(self.supabase_btn)
 
         results_layout.addLayout(results_header)
@@ -208,14 +225,12 @@ class ImportarExcelView(QWidget):
         layout.addStretch()
 
     def _clear_dynamic_widgets(self):
-        while self.stats_row.count():
-            item = self.stats_row.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        while self.warning_container.count():
-            item = self.warning_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        for container in (self.stats_row, self.warning_container):
+            while container.count():
+                item = container.takeAt(0)
+                if item.widget():
+                    item.widget().hide()
+                    item.widget().deleteLater()
 
     def _process_file(self, path: Path):
         self.current_path = path
@@ -239,20 +254,10 @@ class ImportarExcelView(QWidget):
             return
 
         self.result = result
-        origin = "resumen ya depurado" if result.already_clean else "export crudo del lector"
-        self.status_label.setText(f"Completado: {path.name} ({origin})")
+        self.current_origin = "resumen ya depurado" if result.already_clean else "export crudo del lector"
+        self.status_label.setText(f"Completado: {path.name} ({self.current_origin})")
         self.status_label.setStyleSheet(f"color: {COLORS['green']}; font-size: 11px; font-weight: 600;")
         self._render_result(result)
-
-        descartados = result.duplicate_count + result.window_discard_count + result.invalid_date_count
-        store.add_import(
-            archivo=path.name,
-            fecha=datetime.now().strftime("%Y-%m-%d %H:%M"),
-            originales=result.input_count,
-            conservados=len(result.daily_summary),
-            descartados=descartados,
-            origen=origin,
-        )
 
     def _render_result(self, result: CleaningResult):
         self._clear_dynamic_widgets()
@@ -266,7 +271,7 @@ class ImportarExcelView(QWidget):
         if not result.already_clean:
             cards.append(StatCard("🧹", "Duplicados descartados", result.duplicate_count, icon_bg="#fdece0"))
             cards.append(StatCard("⏱", "Descartados por ventana (5 min)", result.window_discard_count, icon_bg="#fdece0"))
-        cards.append(StatCard("⚠️", "Fechas inválidas", result.invalid_date_count, icon_bg="#fde8e8"))
+        cards.append(StatCard("⚠️", "Filas inválidas", result.invalid_count, icon_bg="#fde8e8"))
         cards.append(StatCard("👥", "Empleados únicos", result.unique_employees, icon_bg="#e6f7ec"))
 
         for card in cards:
@@ -295,6 +300,97 @@ class ImportarExcelView(QWidget):
         self.preview_table.load(result.daily_summary, result.shared_codes)
         self.results_card.setVisible(True)
 
+    def _ofrecer_alta_empleados(self, codigos_compartidos: set[str]) -> bool:
+        """Si el archivo trae personas que no existen en la base, ofrece darlas
+        de alta. Regresa False si el usuario cancela el envio."""
+        pendientes = store.empleados_sin_registrar(self.result.daily_summary, codigos_compartidos)
+        if not pendientes:
+            return True
+        ejemplos = "\n".join(f"• {p['nombre']} ({p['codigo']})" for p in pendientes[:10])
+        if len(pendientes) > 10:
+            ejemplos += f"\n... y {len(pendientes) - 10} más."
+        respuesta = QMessageBox.question(
+            self, "Empleados nuevos",
+            f"{len(pendientes)} persona(s) del archivo no están registradas:\n\n{ejemplos}\n\n"
+            "¿Darlas de alta ahora? Quedarán 'sin clasificar' (tipo, turno y área en blanco) para "
+            "que las completes en Profesores/Administrativos.\n\n"
+            "Si eliges No, sus ponchadas no se subirán.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+        )
+        if respuesta == QMessageBox.Cancel:
+            return False
+        if respuesta == QMessageBox.No:
+            return True
+        edificio, ok = QInputDialog.getItem(
+            self, "Edificio inicial",
+            "Edificio que se les asignará (lo puedes corregir después por persona):",
+            EDIFICIOS, 0, False,
+        )
+        if not ok:
+            return False
+        try:
+            store.alta_maestros(pendientes, edificio)
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "Error al dar de alta", str(error))
+            return False
+        return True
+
+    def _enviar_supabase(self):
+        if self.result is None:
+            return
+        if self.current_path is not None:
+            fecha_previa = store.ya_importado(self.current_path.name)
+            if fecha_previa:
+                respuesta = QMessageBox.question(
+                    self, "Archivo ya importado",
+                    f"'{self.current_path.name}' ya se importó el {fecha_previa}.\n\n"
+                    "Volver a enviarlo no duplica registros: los horarios se combinan con los que "
+                    "ya existen. ¿Enviarlo de nuevo?",
+                )
+                if respuesta != QMessageBox.Yes:
+                    return
+
+        origen = self.origen_combo.currentText()
+        ponchador_id = None if origen == ORIGEN_GLOBAL else store.ponchador_id_por_edificio(origen)
+        if origen != ORIGEN_GLOBAL and ponchador_id is None:
+            QMessageBox.critical(self, "Ponchador no encontrado", f"No encontré el ponchador de '{origen}' en Supabase.")
+            return
+
+        codigos_compartidos = set(self.result.shared_codes)
+        if not self._ofrecer_alta_empleados(codigos_compartidos):
+            return
+
+        try:
+            resultado = store.insertar_asistencias(
+                self.result.daily_summary, ponchador_id, codigos_compartidos=codigos_compartidos
+            )
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "Error al enviar a Supabase", str(error))
+            return
+
+        if self.current_path is not None:
+            store.add_import(
+                archivo=self.current_path.name,
+                fecha=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                originales=self.result.input_count,
+                conservados=resultado["insertados"] + resultado["actualizados"] + resultado["sin_cambios"],
+                descartados=len(resultado["sin_match"]),
+                origen=self.current_origin,
+            )
+
+        mensaje = (
+            f"Nuevos: {resultado['insertados']}\n"
+            f"Actualizados (se combinaron con lo existente): {resultado['actualizados']}\n"
+            f"Sin cambios (ya estaban igual): {resultado['sin_cambios']}\n"
+            f"Sin empleado registrado: {len(resultado['sin_match'])}"
+        )
+        if resultado["sin_match"]:
+            ejemplos = "\n".join(resultado["sin_match"][:10])
+            mensaje += f"\n\nNo se subieron (empleado no registrado o nombre ambiguo):\n{ejemplos}"
+            if len(resultado["sin_match"]) > 10:
+                mensaje += f"\n... y {len(resultado['sin_match']) - 10} más."
+        QMessageBox.information(self, "Enviado a Supabase", mensaje)
+
     def _export_result(self):
         if self.result is None:
             return
@@ -302,9 +398,11 @@ class ImportarExcelView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Exportar resultado", default_name, "Excel (*.xlsx)")
         if not path:
             return
-        export_columns = ["fecha", "codigo", "nombre", "entrada", "salida"]
+        export = self.result.daily_summary[["fecha", "codigo", "nombre", "entrada", "salida"]].copy()
+        # Mismos encabezados que espera el importador, para poder volver a subirlo.
+        export.columns = ["Fecha", "Codigo", "Nombre", "Entrada", "Salida"]
         try:
-            self.result.daily_summary[export_columns].to_excel(path, index=False)
+            export.to_excel(path, index=False)
         except Exception as error:  # noqa: BLE001
             QMessageBox.critical(self, "Error al exportar", str(error))
             return

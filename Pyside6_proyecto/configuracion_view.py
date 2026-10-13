@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from store import EDIFICIOS, TURNOS
+from store import EDIFICIOS, TURNOS, store
 from theme import COLORS
 
 
@@ -115,10 +115,14 @@ class ConfiguracionView(QWidget):
         return card
 
     def _guardar_turno(self, turno_id, entrada_edit, salida_edit, tolerancia_spin):
-        TURNOS[turno_id]["hora_entrada"] = entrada_edit.time().toString("HH:mm")
-        TURNOS[turno_id]["hora_salida"] = salida_edit.time().toString("HH:mm")
-        TURNOS[turno_id]["tolerancia_minutos"] = tolerancia_spin.value()
-        QMessageBox.information(
-            self, "Guardado",
-            f"Turno '{turno_id}' actualizado (por ahora solo en esta sesión; falta conectar a Supabase)."
-        )
+        try:
+            store.update_turno(
+                turno_id,
+                hora_entrada=entrada_edit.time().toString("HH:mm"),
+                hora_salida=salida_edit.time().toString("HH:mm"),
+                tolerancia_minutos=tolerancia_spin.value(),
+            )
+        except Exception as error:  # noqa: BLE001 - mostramos cualquier error al usuario
+            QMessageBox.critical(self, "Error al guardar", str(error))
+            return
+        QMessageBox.information(self, "Guardado", f"Turno '{turno_id}' actualizado en Supabase.")

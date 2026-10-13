@@ -1,6 +1,5 @@
 """
 Sistema de Control de Asistencia y Ponchador
-Réplica de la interfaz de referencia construida con PySide6.
 """
 import sys
 
@@ -19,8 +18,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
-    QSpacerItem,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -34,7 +31,9 @@ from importar_view import ImportarExcelView
 from incidencias_view import IncidenciasView
 from limpieza_view import LimpiezaView
 from personas_view import PersonasView
+from report_data import etiqueta_quincena, quincenas_disponibles, resumen_global
 from reportes_view import ReportesView
+from store import store
 from theme import COLORS
 from widgets import StatCard
 
@@ -49,6 +48,33 @@ NAV_ITEMS = [
     ("👤", "Administrativos"),
     ("⚙️", "Configuración"),
 ]
+
+
+def _clear_layout(layout):
+    """Vacia un layout (widgets y sub-layouts anidados) para reconstruirlo.
+
+    takeAt() saca el widget del layout pero no lo oculta -- hasta que
+    deleteLater() se procesa (el siguiente ciclo de eventos) sigue visible
+    en su posicion anterior, encimado con lo nuevo que se agregue en el
+    mismo refresh(). Por eso se oculta aqui mismo, de una vez.
+    """
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.hide()
+            widget.deleteLater()
+        else:
+            sub_layout = item.layout()
+            if sub_layout is not None:
+                _clear_layout(sub_layout)
+
+
+def _etiqueta_corta(anio, mes, mitad):
+    from report_data import MESES, _ultimo_dia_mes
+
+    rango = "1-15" if mitad == "primera" else f"16-{_ultimo_dia_mes(anio, mes)}"
+    return f"{rango} {MESES[mes][:3].capitalize()}"
 
 
 class Sidebar(QFrame):
@@ -95,7 +121,7 @@ class Sidebar(QFrame):
         sep.setStyleSheet(f"background-color: {COLORS['sidebar_bg_hover']}; max-height:1px;")
         layout.addWidget(sep)
 
-        footer = QLabel("v1.0.0\nSistema Institucional\n2024")
+        footer = QLabel("v1.0.0\nSistema Institucional\n2026")
         footer.setStyleSheet(f"color: {COLORS['sidebar_text']}; font-size: 11px; padding: 12px 20px 0 20px;")
         layout.addWidget(footer)
 
@@ -110,10 +136,14 @@ class Sidebar(QFrame):
 
 
 class TopBar(QFrame):
+    quincena_changed = Signal(tuple)
+    busqueda = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("topbar")
         self.setFixedHeight(64)
+        self._quincenas: list[tuple[int, int, str]] = []
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(24, 0, 24, 0)
@@ -132,17 +162,18 @@ class TopBar(QFrame):
 
         layout.addStretch()
 
-        quincena = QComboBox()
-        quincena.addItem("📅  Quincena: 01 - 15 de octubre de 2024")
-        quincena.setObjectName("quincenaBox")
-        quincena.setFixedWidth(260)
-        layout.addWidget(quincena)
+        self.quincena_combo = QComboBox()
+        self.quincena_combo.setObjectName("quincenaBox")
+        self.quincena_combo.setFixedWidth(260)
+        self.quincena_combo.currentIndexChanged.connect(self._on_index_changed)
+        layout.addWidget(self.quincena_combo)
 
-        search = QLineEdit()
-        search.setPlaceholderText("🔍  Buscar empleado...")
-        search.setObjectName("searchBox")
-        search.setFixedWidth(220)
-        layout.addWidget(search)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("🔍  Buscar empleado y Enter...")
+        self.search.setObjectName("searchBox")
+        self.search.setFixedWidth(220)
+        self.search.returnPressed.connect(lambda: self.busqueda.emit(self.search.text().strip()))
+        layout.addWidget(self.search)
 
         avatar = QLabel("👤")
         avatar.setStyleSheet(
@@ -164,15 +195,50 @@ class TopBar(QFrame):
         user_row.addLayout(user_box)
         layout.addLayout(user_row)
 
+        self.set_quincenas(quincenas_disponibles())
 
-def make_chart():
+    def quincena_actual(self) -> tuple[int, int, str] | None:
+        index = self.quincena_combo.currentIndex()
+        return self._quincenas[index] if 0 <= index < len(self._quincenas) else None
+
+    def set_quincenas(self, quincenas: list[tuple[int, int, str]]):
+        """Recarga la lista conservando la quincena elegida. Si esa quincena
+        ya no existe, cae en la mas reciente y avisa a las pantallas para que
+        no se queden mostrando un periodo distinto al del selector."""
+        previa = self.quincena_actual()
+        self._quincenas = quincenas
+        self.quincena_combo.blockSignals(True)
+        self.quincena_combo.clear()
+        if not quincenas:
+            self.quincena_combo.addItem("📅  Sin asistencias importadas")
+        else:
+            for anio, mes, mitad in quincenas:
+                self.quincena_combo.addItem(f"📅  Quincena: {etiqueta_quincena(anio, mes, mitad)}")
+            index = quincenas.index(previa) if previa in quincenas else len(quincenas) - 1
+            self.quincena_combo.setCurrentIndex(index)
+        self.quincena_combo.blockSignals(False)
+        nueva = self.quincena_actual()
+        if previa is not None and nueva is not None and nueva != previa:
+            self.quincena_changed.emit(nueva)
+
+    def _on_index_changed(self, index):
+        if 0 <= index < len(self._quincenas):
+            self.quincena_changed.emit(self._quincenas[index])
+
+
+def _make_chart(datos: list[tuple[str, dict]]):
     set_retardos = QBarSet("Retardos")
     set_permisos = QBarSet("Permisos")
     set_faltas = QBarSet("Faltas")
 
-    set_retardos.append([8, 10, 22, 12])
-    set_permisos.append([6, 7, 9, 8])
-    set_faltas.append([3, 4, 8, 5])
+    categorias = []
+    max_valor = 5
+    for etiqueta, resumen in datos:
+        categorias.append(etiqueta)
+        set_retardos.append(resumen["retardos"])
+        set_permisos.append(resumen["permisos"])
+        set_faltas.append(resumen["faltas"])
+        max_valor = max(max_valor, resumen["retardos"], resumen["permisos"], resumen["faltas"])
 
     set_retardos.setColor(QColor(COLORS["orange"]))
     set_permisos.setColor(QColor(COLORS["blue"]))
@@ -194,13 +260,13 @@ def make_chart():
     chart.layout().setContentsMargins(0, 0, 0, 0)
 
     axis_x = QBarCategoryAxis()
-    axis_x.append(["16-31 Ago", "01-15 Sep", "16-30 Sep", "01-15 Oct"])
+    axis_x.append(categorias or ["Sin datos"])
     axis_x.setLabelsFont(QFont("Segoe UI", 7))
     chart.addAxis(axis_x, Qt.AlignBottom)
     series.attachAxis(axis_x)
 
     axis_y = QValueAxis()
-    axis_y.setRange(0, 30)
+    axis_y.setRange(0, max(10, int(max_valor * 1.2)))
     axis_y.setLabelsFont(QFont("Segoe UI", 7))
     chart.addAxis(axis_y, Qt.AlignLeft)
     series.attachAxis(axis_y)
@@ -212,7 +278,7 @@ def make_chart():
 
 
 class IncidenciasChartCard(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, datos, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
         layout = QVBoxLayout(self)
@@ -222,13 +288,14 @@ class IncidenciasChartCard(QFrame):
         title = QLabel("📈  Incidencias por quincena")
         title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
         layout.addWidget(title)
-        layout.addWidget(make_chart())
+        layout.addWidget(_make_chart(datos))
 
 
 class UploadCard(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, on_click, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
+        self.setCursor(Qt.PointingHandCursor)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
@@ -246,96 +313,127 @@ class UploadCard(QFrame):
         icon = QLabel("📊")
         icon.setAlignment(Qt.AlignCenter)
         icon.setStyleSheet("font-size: 30px;")
-        text1 = QLabel("Arrastra y suelta aquí tu archivo de Excel")
+        text1 = QLabel("Ve a la pantalla de importación")
         text1.setAlignment(Qt.AlignCenter)
         text1.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: 600;")
-        text2 = QLabel("o haz clic en el botón para seleccionar")
+        text2 = QLabel("ahí subes y depuras el Excel de ponchadas")
         text2.setAlignment(Qt.AlignCenter)
         text2.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
 
-        upload_btn = QPushButton("⬆  Subir archivo")
+        upload_btn = QPushButton("⬆  Ir a Importar Excel")
         upload_btn.setObjectName("primaryButton")
         upload_btn.setCursor(Qt.PointingHandCursor)
-        upload_btn.setFixedWidth(160)
-
-        hint = QLabel("Formatos aceptados: .xlsx, .xls  |  Tamaño máximo: 10 MB")
-        hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        upload_btn.setFixedWidth(180)
+        upload_btn.clicked.connect(on_click)
 
         drop_layout.addWidget(icon)
         drop_layout.addWidget(text1)
         drop_layout.addWidget(text2)
         drop_layout.addWidget(upload_btn, alignment=Qt.AlignCenter)
-        drop_layout.addWidget(hint)
 
         layout.addWidget(drop)
+        self._on_click = on_click
+
+    def mousePressEvent(self, event):
+        self._on_click()
+        super().mousePressEvent(event)
 
 
 class ProcessCard(QFrame):
-    STEPS = [
-        ("Leer archivo", "Se cargan los registros del archivo Excel.", "done"),
-        ("Depurar registros duplicados", "Se eliminan registros repetidos.", "done"),
-        ("Conservar 1 entrada y 1 salida por día", "Se valida y deja solo un registro de entrada y uno de salida.", "pending"),
-        ("Validar horarios", "Se revisan los horarios contra la configuración.", "pending"),
-    ]
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(14)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(18, 16, 18, 16)
+        self._layout.setSpacing(14)
 
-        title = QLabel("⚙️  Proceso de limpieza")
+        title = QLabel("✅  Pendientes de configuración")
         title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        layout.addWidget(title)
+        self._layout.addWidget(title)
 
-        for i, (step_title, desc, status) in enumerate(self.STEPS, start=1):
-            row = QHBoxLayout()
-            row.setSpacing(12)
+        self._steps_container = QVBoxLayout()
+        self._steps_container.setSpacing(14)
+        self._layout.addLayout(self._steps_container)
+        self._layout.addStretch()
 
-            badge = QLabel("✓" if status == "done" else str(i))
-            badge.setFixedSize(26, 26)
-            badge.setAlignment(Qt.AlignCenter)
-            bg = COLORS["green"] if status == "done" else COLORS["blue"]
-            badge.setStyleSheet(
-                f"background-color: {bg}; color: white; border-radius: 13px; font-size: 12px; font-weight: 700;"
+        self.refresh()
+
+    def _step_widget(self, index, title, desc, done):
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(12)
+
+        badge = QLabel("✓" if done else str(index))
+        badge.setFixedSize(26, 26)
+        badge.setAlignment(Qt.AlignCenter)
+        bg = COLORS["green"] if done else COLORS["blue"]
+        badge.setStyleSheet(
+            f"background-color: {bg}; color: white; border-radius: 13px; font-size: 12px; font-weight: 700;"
+        )
+        row_layout.addWidget(badge)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(1)
+        t = QLabel(title)
+        t.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: 600;")
+        d = QLabel(desc)
+        d.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        d.setWordWrap(True)
+        text_box.addWidget(t)
+        text_box.addWidget(d)
+        row_layout.addLayout(text_box, 1)
+        return row
+
+    def refresh(self):
+        _clear_layout(self._steps_container)
+
+        maestros = store.maestros
+        total = len(maestros)
+        sin_clasificar = sum(1 for m in maestros if not m.tipo_personal)
+        sin_turno = sum(1 for m in maestros if not m.turno)
+
+        if total == 0:
+            paso_clasificar = ("Clasificar tipo de personal", "Todavía no hay empleados registrados.", False)
+            paso_turno = ("Asignar turno a los empleados", "Todavía no hay empleados registrados.", False)
+        else:
+            paso_clasificar = (
+                "Clasificar tipo de personal",
+                "Todos los empleados están clasificados."
+                if sin_clasificar == 0
+                else f"Faltan {sin_clasificar} de {total} empleados por clasificar.",
+                sin_clasificar == 0,
             )
-            row.addWidget(badge)
+            paso_turno = (
+                "Asignar turno a los empleados",
+                "Todos los empleados tienen turno asignado."
+                if sin_turno == 0
+                else f"Faltan {sin_turno} de {total} empleados por asignarles turno.",
+                sin_turno == 0,
+            )
 
-            text_box = QVBoxLayout()
-            text_box.setSpacing(1)
-            t = QLabel(step_title)
-            t.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: 600;")
-            d = QLabel(desc)
-            d.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
-            d.setWordWrap(True)
-            text_box.addWidget(t)
-            text_box.addWidget(d)
-            row.addLayout(text_box, 1)
-
-            layout.addLayout(row)
-
-        layout.addStretch()
-
-        btn_row = QHBoxLayout()
-        run_btn = QPushButton("▶  Ejecutar proceso de limpieza")
-        run_btn.setObjectName("primaryButton")
-        run_btn.setCursor(Qt.PointingHandCursor)
-        detail_btn = QPushButton("Ver detalle")
-        detail_btn.setObjectName("secondaryButton")
-        detail_btn.setCursor(Qt.PointingHandCursor)
-        btn_row.addWidget(run_btn)
-        btn_row.addWidget(detail_btn)
-        layout.addLayout(btn_row)
+        pasos = [
+            (
+                "Importar ponchadas de Excel",
+                f"{len(store.import_history)} archivo(s) importado(s)."
+                if store.import_history
+                else "Todavía no se ha importado ningún archivo.",
+                bool(store.import_history),
+            ),
+            paso_clasificar,
+            paso_turno,
+        ]
+        for i, (paso_titulo, paso_desc, done) in enumerate(pasos, start=1):
+            self._steps_container.addWidget(self._step_widget(i, paso_titulo, paso_desc, done))
 
 
 class ReportChip(QFrame):
-    def __init__(self, title, color, parent=None):
+    def __init__(self, title, color, on_click, parent=None):
         super().__init__(parent)
         self.setObjectName("reportChip")
         self.setProperty("chipColor", color)
         self.setCursor(Qt.PointingHandCursor)
+        self._on_click = on_click
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
 
@@ -351,13 +449,22 @@ class ReportChip(QFrame):
         layout.addWidget(label, 1)
         layout.addWidget(arrow)
 
-        self.setStyleSheet(
-            f"#reportChip {{ background-color: {color}; border-radius: 10px; }}"
-        )
+        self.setStyleSheet(f"#reportChip {{ background-color: {color}; border-radius: 10px; }}")
+
+    def mousePressEvent(self, event):
+        self._on_click()
+        super().mousePressEvent(event)
 
 
 class ReportsCard(QFrame):
-    def __init__(self, parent=None):
+    CHIPS = [
+        ("Concentrado Incidencias\nProfesor de Asignatura", "#e8f0fe", None),
+        ("Concentrado Incidencias\nAdministrativo y PTC", "#e6f7ec", "F05"),
+        ("Control Quincenal\nProfesor de Asignatura", "#e8f0fe", "F02"),
+        ("Control Quincenal\nAdministrativos y PTC", "#fdece0", "F01"),
+    ]
+
+    def __init__(self, navigate, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
         layout = QVBoxLayout(self)
@@ -370,47 +477,32 @@ class ReportsCard(QFrame):
 
         grid = QGridLayout()
         grid.setSpacing(10)
-        chips = [
-            ("Concentrado Incidencias\nProfesor de Asignatura", "#e8f0fe"),
-            ("Concentrado Incidencias\nAdministrativo y PTC", "#e6f7ec"),
-            ("Control Quincenal\nProfesor de Asignatura", "#e8f0fe"),
-            ("Control Quincenal\nAdministrativos y PTC", "#fdece0"),
-        ]
-        for i, (text, color) in enumerate(chips):
-            grid.addWidget(ReportChip(text, color), i // 2, i % 2)
+        for i, (text, color, clave) in enumerate(self.CHIPS):
+            chip = ReportChip(text, color, lambda c=clave: navigate(5, c))
+            grid.addWidget(chip, i // 2, i % 2)
         layout.addLayout(grid)
 
         all_btn = QPushButton("📄  Ver todos los reportes")
         all_btn.setObjectName("secondaryButton")
         all_btn.setCursor(Qt.PointingHandCursor)
+        all_btn.clicked.connect(lambda: navigate(5))
         layout.addWidget(all_btn)
 
 
-TABLE_DATA = [
-    ("01/10/2024", "María González López", "Profesor de Asignatura", "07:05", "14:00", "00:05", "-", "-", "-"),
-    ("01/10/2024", "Juan Pérez Ramírez", "Administrativo", "08:00", "16:00", "-", "-", "-", "-"),
-    ("01/10/2024", "Ana Laura Martínez", "Profesor de Asignatura", "07:15", "14:05", "00:15", "-", "-", "Llegó tarde por tráfico"),
-    ("01/10/2024", "Carlos Hernández Ortiz", "PTC", "08:00", "16:00", "-", "✓", "-", "Permiso personal"),
-    ("02/10/2024", "Lucía Fernández Ruiz", "Administrativo", "08:00", "16:00", "-", "-", "-", "-"),
-    ("02/10/2024", "Miguel Ángel Torres", "Profesor de Asignatura", "07:00", "14:00", "-", "-", "-", "-"),
-    ("02/10/2024", "Sandra Chávez Molina", "PTC", "-", "-", "-", "-", "✓", "Falta injustificada"),
-    ("02/10/2024", "Roberto Díaz Sánchez", "Administrativo", "08:10", "16:00", "00:10", "-", "-", "-"),
-]
-
 TIPO_COLORS = {
-    "Profesor de Asignatura": ("#e8f0fe", "#2563eb"),
     "Administrativo": ("#e6f7ec", "#16a34a"),
-    "PTC": ("#f3e8fd", "#7c3aed"),
+    "Profesor de Tiempo Completo": ("#f3e8fd", "#7c3aed"),
+    "Profesor de Asignatura": ("#e8f0fe", "#2563eb"),
 }
 
 
 class TypeBadge(QWidget):
     def __init__(self, text, parent=None):
         super().__init__(parent)
-        bg, fg = TIPO_COLORS.get(text, ("#eee", "#333"))
+        bg, fg = TIPO_COLORS.get(text, ("#eee", "#666"))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
-        lbl = QLabel(text)
+        lbl = QLabel(text or "Sin clasificar")
         lbl.setStyleSheet(
             f"background-color: {bg}; color: {fg}; border-radius: 8px; padding: 3px 10px;"
             f"font-size: 10px; font-weight: 600;"
@@ -420,9 +512,9 @@ class TypeBadge(QWidget):
 
 
 class RecordsTable(QFrame):
-    HEADERS = ["Fecha", "Empleado", "Tipo", "Entrada", "Salida", "Retardo", "Permiso", "Falta", "Observaciones", "Acciones"]
+    HEADERS = ["Fecha", "Empleado", "Tipo", "Entrada", "Salida", "Retardo (min)", "Observaciones"]
 
-    def __init__(self, parent=None):
+    def __init__(self, filas, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
         layout = QVBoxLayout(self)
@@ -430,108 +522,179 @@ class RecordsTable(QFrame):
         layout.setSpacing(10)
 
         header_row = QHBoxLayout()
-        title = QLabel("📄  Registros de asistencia (vista preliminar)")
+        title = QLabel("📄  Últimas ponchadas registradas")
         title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
         header_row.addWidget(title)
         header_row.addStretch()
-
-        filt_btn = QPushButton("▽  Filtros")
-        filt_btn.setObjectName("secondaryButton")
-        filt_btn.setCursor(Qt.PointingHandCursor)
-        search = QLineEdit()
-        search.setPlaceholderText("🔍  Buscar en registros...")
-        search.setObjectName("searchBox")
-        search.setFixedWidth(200)
-        header_row.addWidget(filt_btn)
-        header_row.addWidget(search)
         layout.addLayout(header_row)
 
-        table = QTableWidget(len(TABLE_DATA), len(self.HEADERS))
+        table = QTableWidget(len(filas), len(self.HEADERS))
         table.setHorizontalHeaderLabels(self.HEADERS)
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.setShowGrid(False)
-        table.setAlternatingRowColors(False)
-        table.horizontalHeader().setStretchLastSection(False)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         table.verticalHeader().setDefaultSectionSize(40)
-        table.setColumnWidth(9, 60)
 
-        for row, record in enumerate(TABLE_DATA):
-            fecha, empleado, tipo, entrada, salida, retardo, permiso, falta, obs = record
-            table.setItem(row, 0, QTableWidgetItem(fecha))
-            table.setItem(row, 1, QTableWidgetItem(empleado))
-            table.setCellWidget(row, 2, TypeBadge(tipo))
-            table.setItem(row, 3, QTableWidgetItem(entrada))
-            table.setItem(row, 4, QTableWidgetItem(salida))
+        for row, r in enumerate(filas):
+            table.setItem(row, 0, QTableWidgetItem(r["fecha"]))
+            table.setItem(row, 1, QTableWidgetItem(r["nombre"]))
+            table.setCellWidget(row, 2, TypeBadge(r["tipo_personal"]))
+            table.setItem(row, 3, QTableWidgetItem(r["entrada"]))
+            table.setItem(row, 4, QTableWidgetItem(r["salida"]))
 
-            retardo_item = QTableWidgetItem(retardo)
-            if retardo != "-":
+            retardo_item = QTableWidgetItem(str(r["retardo"]) if r["retardo"] else "-")
+            if r["retardo"]:
                 retardo_item.setForeground(QColor(COLORS["orange"]))
                 f = QFont()
                 f.setBold(True)
                 retardo_item.setFont(f)
             table.setItem(row, 5, retardo_item)
-
-            permiso_item = QTableWidgetItem(permiso)
-            if permiso == "✓":
-                permiso_item.setForeground(QColor(COLORS["blue"]))
-            table.setItem(row, 6, permiso_item)
-
-            falta_item = QTableWidgetItem(falta)
-            if falta == "✓":
-                falta_item.setForeground(QColor(COLORS["red"]))
-            table.setItem(row, 7, falta_item)
-
-            table.setItem(row, 8, QTableWidgetItem(obs))
-            table.setItem(row, 9, QTableWidgetItem("⋯"))
-            table.item(row, 9).setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 6, QTableWidgetItem(r["observaciones"] or "-"))
 
         layout.addWidget(table)
 
+        if not filas:
+            empty = QLabel("Todavía no hay ponchadas importadas.")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; padding: 20px;")
+            layout.addWidget(empty)
+
 
 class DashboardContent(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, navigate, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 24)
-        layout.setSpacing(16)
+        self.navigate = navigate
+        self._quincena_actual: tuple[int, int, str] | None = None
 
-        # Stats row
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        suffix = "vs. quincena anterior"
-        cards = [
-            StatCard("⏱", "Retardos", 12, "+3%", True, "#fdece0", delta_suffix=suffix),
-            StatCard("📄", "Permisos", 8, "-11%", False, "#e8f0fe", delta_suffix=suffix),
-            StatCard("✕", "Faltas", 5, "-38%", False, "#fde8e8", delta_suffix=suffix),
-            StatCard("👥", "Asistencias", 186, "+6%", True, "#e6f7ec", delta_suffix=suffix),
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(24, 20, 24, 24)
+        self._layout.setSpacing(16)
+
+        self._stats_row = QHBoxLayout()
+        self._stats_row.setSpacing(16)
+        self._layout.addLayout(self._stats_row)
+
+        self._coverage_label = QLabel("")
+        self._coverage_label.setStyleSheet(
+            f"color: {COLORS['orange']}; font-size: 11px; font-weight: 600; padding: 2px 2px 0 2px;"
+        )
+        self._coverage_label.setVisible(False)
+        self._layout.addWidget(self._coverage_label)
+
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(16)
+        self.process_card = ProcessCard()
+        mid_row.addWidget(UploadCard(lambda: self.navigate(1)), 1)
+        mid_row.addWidget(self.process_card, 1)
+        mid_row.addWidget(ReportsCard(self.navigate), 1)
+        self._layout.addLayout(mid_row)
+
+        self._table_container = QVBoxLayout()
+        self._layout.addLayout(self._table_container)
+        self._layout.addStretch()
+
+        self.refresh()
+
+    def set_quincena(self, quincena: tuple[int, int, str]):
+        self._quincena_actual = quincena
+        self.refresh()
+
+    def refresh(self):
+        self.process_card.refresh()
+        self._rebuild_stats_and_chart()
+        self._rebuild_table()
+
+    def _rebuild_stats_and_chart(self):
+        _clear_layout(self._stats_row)
+
+        quincenas = quincenas_disponibles()
+        maestros = store.maestros
+        # Memo por si la quincena actual/anterior coincide con alguna de las
+        # ultimas 4 que tambien se grafican -- resumen_global ya hace una
+        # consulta a Supabase, no tiene sentido repetirla en el mismo refresh.
+        cache: dict[tuple[int, int, str], dict] = {}
+
+        def resumen(quincena):
+            if quincena not in cache:
+                cache[quincena] = resumen_global(maestros, *quincena)
+            return cache[quincena]
+
+        actual_q = self._quincena_actual if self._quincena_actual in quincenas else (quincenas[-1] if quincenas else None)
+        anterior_q = None
+        if actual_q and actual_q in quincenas:
+            idx = quincenas.index(actual_q)
+            if idx > 0:
+                anterior_q = quincenas[idx - 1]
+
+        actual = (
+            resumen(actual_q)
+            if actual_q
+            else {"asistencias": 0, "retardos": 0, "permisos": 0, "faltas": 0, "dias_totales": 0, "dias_con_datos": 0}
+        )
+        anterior = resumen(anterior_q) if anterior_q else None
+        suffix = "vs. quincena anterior" if anterior else ""
+
+        def delta(clave):
+            if anterior is None:
+                return None, True
+            a, b = actual[clave], anterior[clave]
+            if b == 0:
+                return (None, True) if a == 0 else ("nuevo", True)
+            pct = round((a - b) / b * 100)
+            return f"{pct:+d}%", pct >= 0
+
+        cards_def = [
+            ("⏱", "Retardos", "retardos", "#fdece0"),
+            ("📄", "Permisos", "permisos", "#e8f0fe"),
+            ("✕", "Faltas", "faltas", "#fde8e8"),
+            ("👥", "Asistencias", "asistencias", "#e6f7ec"),
         ]
         left_col = QVBoxLayout()
         left_col.setSpacing(16)
         top_stats = QHBoxLayout()
         top_stats.setSpacing(16)
-        for c in cards:
-            top_stats.addWidget(c)
+        for icon, titulo, clave, bg in cards_def:
+            delta_text, delta_up = delta(clave)
+            top_stats.addWidget(StatCard(icon, titulo, actual[clave], delta_text, delta_up, bg, delta_suffix=suffix))
         left_col.addLayout(top_stats)
+        self._stats_row.addLayout(left_col, 2)
 
-        stats_row.addLayout(left_col, 2)
-        stats_row.addWidget(IncidenciasChartCard(), 2)
-        layout.addLayout(stats_row)
+        faltantes = actual["dias_totales"] - actual["dias_con_datos"]
+        if actual_q and faltantes > 0:
+            self._coverage_label.setText(
+                f"⚠️  {faltantes} de {actual['dias_totales']} días hábiles de esta quincena todavía no tienen "
+                "ninguna ponchada importada — no se cuentan como falta, solo se excluyen del total."
+            )
+            self._coverage_label.setVisible(True)
+        else:
+            self._coverage_label.setVisible(False)
 
-        # Middle row: upload / process / reports
-        mid_row = QHBoxLayout()
-        mid_row.setSpacing(16)
-        mid_row.addWidget(UploadCard(), 1)
-        mid_row.addWidget(ProcessCard(), 1)
-        mid_row.addWidget(ReportsCard(), 1)
-        layout.addLayout(mid_row)
+        ultimas = quincenas[-4:] if quincenas else []
+        datos_chart = [(_etiqueta_corta(*q), resumen(q)) for q in ultimas]
+        self._stats_row.addWidget(IncidenciasChartCard(datos_chart), 2)
 
-        # Table
-        layout.addWidget(RecordsTable())
+    def _rebuild_table(self):
+        _clear_layout(self._table_container)
+        maestros_by_id = {m.id: m for m in store.maestros}
+        filas = []
+        for r in store.reporte_asistencias(limit=8):
+            maestro = maestros_by_id.get(r.get("maestro_id"))
+            filas.append(
+                {
+                    "fecha": r.get("fecha") or "",
+                    "nombre": r.get("nombre") or "",
+                    "tipo_personal": maestro.tipo_personal if maestro else None,
+                    "entrada": (r.get("entrada") or "-")[:5],
+                    "salida": (r.get("salida") or "-")[:5],
+                    "retardo": r.get("retardo_minutos_referencia") or 0,
+                    "observaciones": r.get("observaciones"),
+                }
+            )
+        self._table_container.addWidget(RecordsTable(filas))
 
 
 class ComingSoonPage(QWidget):
@@ -570,12 +733,14 @@ class MainWindow(QMainWindow):
         right.setSpacing(0)
 
         self.topbar = TopBar()
+        self.topbar.quincena_changed.connect(self._on_quincena_changed)
+        self.topbar.busqueda.connect(self._buscar_empleado)
         right.addWidget(self.topbar)
 
         self.pages = QStackedWidget()
         self.page_indices = {}
         page_factories = {
-            0: DashboardContent,
+            0: lambda: DashboardContent(self.navigate),
             1: ImportarExcelView,
             2: LimpiezaView,
             3: AsistenciasView,
@@ -588,6 +753,14 @@ class MainWindow(QMainWindow):
         for i, (_icon, label) in enumerate(NAV_ITEMS):
             factory = page_factories.get(i)
             page = factory() if factory else ComingSoonPage(label)
+            if i == 0:
+                self.dashboard = page
+            if i == 3:
+                self.asistencias_page = page
+            if i == 4:
+                self.incidencias_page = page
+            if i == 5:
+                self.reportes_page = page
 
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -602,12 +775,28 @@ class MainWindow(QMainWindow):
         right_widget.setLayout(right)
         root.addWidget(right_widget, 1)
 
+    def navigate(self, nav_index, report_key=None):
+        self.sidebar._select(self.sidebar.nav_buttons[nav_index], nav_index)
+        if report_key and nav_index == 5:
+            self.reportes_page._select_report(report_key)
+
+    def _on_quincena_changed(self, quincena):
+        self.dashboard.set_quincena(quincena)
+        self.asistencias_page.set_quincena(quincena)
+        self.incidencias_page.set_quincena(quincena)
+
+    def _buscar_empleado(self, texto):
+        self.asistencias_page.search_box.setText(texto)
+        self.navigate(3)
+
     def _show_page(self, nav_index):
         self.pages.setCurrentIndex(self.page_indices[nav_index])
         scroll = self.pages.currentWidget()
         page = scroll.widget()
         if hasattr(page, "refresh"):
             page.refresh()
+        if nav_index == 0:
+            self.topbar.set_quincenas(quincenas_disponibles())
 
 
 STYLE_SHEET = f"""
@@ -780,6 +969,7 @@ QPushButton#secondaryButton:hover {{
 QTableWidget {{
     border: none;
     background-color: white;
+    color: {COLORS['text_primary']};
     gridline-color: {COLORS['border']};
     font-size: 11.5px;
 }}
@@ -796,7 +986,43 @@ QHeaderView::section {{
 QTableWidget::item {{
     border-bottom: 1px solid {COLORS['border']};
     padding-left: 4px;
+}}
+QDialog {{
+    background-color: white;
+}}
+QDialog QLabel, QDialog QCheckBox {{
     color: {COLORS['text_primary']};
+    font-size: 12px;
+}}
+QDialog QScrollArea, QDialog QScrollArea > QWidget > QWidget {{
+    background-color: white;
+}}
+QDialog QPushButton {{
+    background-color: white;
+    color: {COLORS['text_primary']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 6px;
+    padding: 6px 18px;
+    font-size: 12px;
+}}
+QDialog QPushButton:hover {{
+    background-color: #f2f4f9;
+}}
+QDialog QPushButton:default {{
+    background-color: {COLORS['blue']};
+    color: white;
+    border: none;
+}}
+QPushButton#tableButton {{
+    background-color: white;
+    color: {COLORS['text_primary']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-size: 11px;
+}}
+QPushButton#tableButton:hover {{
+    background-color: #f2f4f9;
 }}
 """
 

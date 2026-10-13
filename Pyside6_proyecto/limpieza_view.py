@@ -18,7 +18,7 @@ class LimpiezaView(QWidget):
 
         title = QLabel("Limpieza de registros")
         title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        subtitle = QLabel("Historial de archivos importados en esta sesión y cuántos registros se conservaron.")
+        subtitle = QLabel("Historial real de archivos enviados a Supabase y cuántos registros se conservaron.")
         subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
         layout.addWidget(title)
         layout.addWidget(subtitle)
