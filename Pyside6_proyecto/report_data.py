@@ -126,12 +126,21 @@ def generar_quincena(maestros, anio: int, mes: int, mitad: str):
                 ),
                 None,
             )
-            if incidencia:
-                celdas.append({"dia": dia, "tipo": "incidencia", "clave": incidencia.tipo})
-                continue
-
             fecha = dia.isoformat()
             fila = asistencia_por_clave.get((maestro.id, fecha))
+            if incidencia:
+                celdas.append(
+                    {
+                        "dia": dia,
+                        "tipo": "incidencia",
+                        "clave": incidencia.tipo,
+                        # Las claves EA/SA solo cubren una marca: la otra se sigue mostrando.
+                        "entrada": ((fila or {}).get("entrada") or "")[:5],
+                        "salida": ((fila or {}).get("salida") or "")[:5],
+                    }
+                )
+                continue
+
             if fila is None:
                 primera = store.primera_ponchada(maestro.id)
                 if fecha not in dias_con_datos:
@@ -166,7 +175,16 @@ def generar_quincena(maestros, anio: int, mes: int, mitad: str):
                 # la vista) -- se muestra el estado tal cual para revisarlo,
                 # no se inventa un retardo ni se cuenta como falta.
                 estado = (fila.get("estado") or "incompleto").replace("_", " ").upper()
-                celdas.append({"dia": dia, "tipo": "incompleto", "clave": estado})
+                celdas.append(
+                    {
+                        "dia": dia,
+                        "tipo": "incompleto",
+                        "clave": estado,
+                        "estado": fila.get("estado"),
+                        "entrada": (fila.get("entrada") or "")[:5],
+                        "salida": (fila.get("salida") or "")[:5],
+                    }
+                )
         resultado[maestro.id] = celdas
     return dias, resultado
 

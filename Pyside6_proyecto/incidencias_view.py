@@ -36,8 +36,9 @@ from PySide6.QtWidgets import (
 
 from report_data import business_days, etiqueta_quincena, generar_quincena, quincenas_disponibles
 from store import TIPOS_INCIDENCIA, calcular_retardo, store
+from iconos import con_icono
 from theme import COLORS
-from widgets import size_table_to_contents
+from widgets import SectionTitle, size_table_to_contents
 
 # Entrada/Salida Autorizada no aplican a un dia completo sin ponchar.
 TIPOS_FALTA_JUSTIFICADA = ["P", "C", "I", "AM", "PS"]
@@ -181,7 +182,7 @@ class CambioTurnoDialog(QDialog):
 
         ayuda = QLabel(f"Tolerancia: {tolerancia} min. El retardo se cuenta desde esa hora, no desde la de su turno.")
         ayuda.setWordWrap(True)
-        ayuda.setStyleSheet("font-size: 11px; font-style: italic;")
+        ayuda.setStyleSheet("font-size: 11px;")
         layout.addWidget(ayuda)
 
         layout.addWidget(QLabel("Días con cambio de turno:"))
@@ -221,7 +222,7 @@ class CambioTurnoDialog(QDialog):
         hora = self._hora_texto()
         for (_, texto, entrada), check in zip(self._dias, self.checks):
             minutos = calcular_retardo(entrada, hora, self._tolerancia)
-            check.setText(f"{texto}  →  {f'{minutos} min de retardo' if minutos else 'sin retardo'}")
+            check.setText(f"{texto} — {f'{minutos} min de retardo' if minutos else 'sin retardo'}")
 
     def _validar(self):
         if not any(check.isChecked() for check in self.checks):
@@ -242,22 +243,14 @@ class IncidenciasView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Incidencias")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        subtitle = QLabel(
-            "Registra permisos, comisiones, incapacidades y atenciones médicas — las faltas y retardos se calculan solos."
-        )
-        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
 
         layout.addWidget(self._build_form_card())
 
         self.retardos_table, self.retardos_resumen, self.retardos_vacio, card = self._build_quincena_card(
-            "⏱  Retardos de la quincena",
+            "retardo", "Retardos de la quincena",
             "Se calculan solos con las ponchadas (solo días hábiles del calendario). Si alguien cambió de horario "
             "esos días (ej. entró a las 10:00), usa \"Cambio de turno\": el retardo se recalcula desde su nueva "
-            "hora de entrada, descontando la tolerancia (⇄). Con \"Justificar\" eliges qué días y el motivo; se "
+            "hora de entrada, descontando la tolerancia (se marca con *). Con \"Justificar\" eliges qué días y el motivo; se "
             "registran como Entrada Autorizada (EA) y dejan de contar como retardo.",
             ["Empleado", "Turno", "Retardos", "Minutos", "Fechas (minutos)", ""],
             ancho_accion=250,
@@ -265,7 +258,7 @@ class IncidenciasView(QWidget):
         layout.addWidget(card)
 
         self.faltas_table, self.faltas_resumen, self.faltas_vacio, card = self._build_quincena_card(
-            "✕  Faltas de la quincena",
+            "falta", "Faltas de la quincena",
             "Días hábiles sin ninguna ponchada (no cuenta vacaciones, días inhábiles ni profesores de asignatura). "
             "Con \"Justificar\" eliges qué días, el tipo (permiso, comisión, incapacidad...) y el motivo.",
             ["Empleado", "Turno", "Días que faltó", "Fechas", ""],
@@ -288,9 +281,7 @@ class IncidenciasView(QWidget):
         form_layout.setContentsMargins(18, 16, 18, 16)
         form_layout.setSpacing(12)
 
-        form_title = QLabel("➕  Nueva incidencia")
-        form_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        form_layout.addWidget(form_title)
+        form_layout.addWidget(SectionTitle("agregar", "Nueva incidencia"))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -325,7 +316,7 @@ class IncidenciasView(QWidget):
 
         save_row = QHBoxLayout()
         save_row.addStretch()
-        save_btn = QPushButton("💾  Guardar incidencia")
+        save_btn = con_icono(QPushButton("Guardar incidencia"), "guardar", "#ffffff")
         save_btn.setObjectName("primaryButton")
         save_btn.setCursor(Qt.PointingHandCursor)
         save_btn.clicked.connect(self._guardar)
@@ -333,7 +324,7 @@ class IncidenciasView(QWidget):
         form_layout.addLayout(save_row)
         return form_card
 
-    def _build_quincena_card(self, titulo: str, ayuda: str, headers: list[str], ancho_accion: int = 110):
+    def _build_quincena_card(self, icono_nombre: str, titulo: str, ayuda: str, headers: list[str], ancho_accion: int = 110):
         card = QFrame()
         card.setObjectName("statCard")
         card_layout = QVBoxLayout(card)
@@ -341,9 +332,7 @@ class IncidenciasView(QWidget):
         card_layout.setSpacing(10)
 
         header = QHBoxLayout()
-        title = QLabel(titulo)
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        header.addWidget(title)
+        header.addWidget(SectionTitle(icono_nombre, titulo))
         header.addStretch()
         resumen = QLabel("")
         resumen.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600;")
@@ -352,7 +341,7 @@ class IncidenciasView(QWidget):
 
         hint = QLabel(ayuda)
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px; font-style: italic;")
+        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
         card_layout.addWidget(hint)
 
         table = QTableWidget(0, len(headers))
@@ -384,12 +373,10 @@ class IncidenciasView(QWidget):
         card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(10)
 
-        title = QLabel("⇄  Cambios de turno registrados")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        card_layout.addWidget(title)
+        card_layout.addWidget(SectionTitle("turno", "Cambios de turno registrados"))
         hint = QLabel("Días en que alguien entró a otra hora. Elimina uno para volver a contar su retardo con el turno normal.")
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px; font-style: italic;")
+        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
         card_layout.addWidget(hint)
 
         self.cambios_table = QTableWidget(0, 4)
@@ -415,9 +402,7 @@ class IncidenciasView(QWidget):
         list_layout.setContentsMargins(18, 16, 18, 16)
         list_layout.setSpacing(10)
 
-        list_title = QLabel("📋  Incidencias registradas")
-        list_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        list_layout.addWidget(list_title)
+        list_layout.addWidget(SectionTitle("lista", "Incidencias registradas"))
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Empleado", "Tipo", "Desde", "Hasta", "Observaciones", ""])
@@ -516,14 +501,14 @@ class IncidenciasView(QWidget):
         minutos = sum(x["retardo_minutos_referencia"] for _, r in filas for x in r)
         etiqueta = etiqueta_quincena(*quincena) if quincena else "sin quincena"
         self.retardos_resumen.setText(
-            f"📅 {etiqueta}  ·  {total} retardo(s) sin justificar  ·  {minutos} min  ·  {len(filas)} persona(s)"
+            f"{etiqueta}: {total} retardo(s) sin justificar, {minutos} min, {len(filas)} persona(s)"
         )
 
         self.retardos_table.setRowCount(len(filas))
         for row, (maestro, retardos) in enumerate(filas):
             fechas = ",  ".join(
                 f"{_fecha_corta(date.fromisoformat(r['fecha']))} ({r['retardo_minutos_referencia']}"
-                f"{' ⇄' if r.get('cambio_turno') else ''})"
+                f"{'*' if r.get('cambio_turno') else ''})"
                 for r in retardos
             )
             self.retardos_table.setItem(row, 0, QTableWidgetItem(maestro.nombre))
@@ -563,7 +548,7 @@ class IncidenciasView(QWidget):
 
         total = sum(len(dias) for _, dias in filas)
         etiqueta = etiqueta_quincena(*quincena) if quincena else "sin quincena"
-        self.faltas_resumen.setText(f"📅 {etiqueta}  ·  {total} falta(s)  ·  {len(filas)} persona(s)")
+        self.faltas_resumen.setText(f"{etiqueta}: {total} falta(s), {len(filas)} persona(s)")
 
         self.faltas_table.setRowCount(len(filas))
         for row, (maestro, dias) in enumerate(filas):
@@ -658,10 +643,10 @@ class IncidenciasView(QWidget):
                 row, 1, QTableWidgetItem(f"{DIAS_CORTOS[cambio.fecha.weekday()]} {cambio.fecha.strftime('%Y-%m-%d')}")
             )
             self.cambios_table.setItem(row, 2, QTableWidgetItem(cambio.hora_entrada))
-            delete_btn = QPushButton("🗑")
+            delete_btn = con_icono(QPushButton(), "eliminar")
             delete_btn.setObjectName("tableButton")
             delete_btn.setCursor(Qt.PointingHandCursor)
-            delete_btn.setFixedWidth(32)
+            delete_btn.setFixedSize(34, 28)
             delete_btn.clicked.connect(lambda _, cid=cambio.id: self._eliminar_cambio(cid))
             self.cambios_table.setCellWidget(row, 3, delete_btn)
         self.cambios_table.setVisible(bool(cambios))
@@ -740,10 +725,10 @@ class IncidenciasView(QWidget):
             for col, value in enumerate(values):
                 self.table.setItem(row, col, QTableWidgetItem(value))
 
-            delete_btn = QPushButton("🗑")
+            delete_btn = con_icono(QPushButton(), "eliminar")
             delete_btn.setObjectName("tableButton")
             delete_btn.setCursor(Qt.PointingHandCursor)
-            delete_btn.setFixedWidth(32)
+            delete_btn.setFixedSize(34, 28)
             delete_btn.clicked.connect(lambda _, inc_id=incidencia.id: self._eliminar(inc_id))
             self.table.setCellWidget(row, 5, delete_btn)
         size_table_to_contents(self.table)

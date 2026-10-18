@@ -28,15 +28,6 @@ TIPOS_INCIDENCIA = {
     "SA": "Salida Autorizada",
 }
 
-CARRERAS = [
-    "Ingeniería en Sistemas Computacionales",
-    "Ingeniería Industrial",
-    "Administración",
-    "Contaduría",
-    "Gastronomía",
-]
-
-
 @dataclass
 class Maestro:
     id: str
@@ -381,12 +372,25 @@ class SupabaseStore:
             self._aplicar_cambio_turno(fila)
         return filas
 
-    def rango_fechas_asistencias(self) -> tuple[str, str] | None:
-        primero = self.client.table("asistencias").select("fecha").order("fecha").limit(1).execute()
-        if not primero.data:
-            return None
-        ultimo = self.client.table("asistencias").select("fecha").order("fecha", desc=True).limit(1).execute()
-        return primero.data[0]["fecha"], ultimo.data[0]["fecha"]
+    def historial_ponchadas(self) -> list[dict]:
+        """Todas las asistencias (maestro, fecha, entrada, salida), paginando: sirve para
+        saber como se comporta cada persona (ver clasificador.py)."""
+        filas: list[dict] = []
+        offset = 0
+        page_size = 1000
+        while True:
+            pagina = (
+                self.client.table("asistencias")
+                .select("maestro_id, fecha, entrada, salida")
+                .order("id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+                .data
+            )
+            filas.extend(pagina)
+            if len(pagina) < page_size:
+                return filas
+            offset += page_size
 
     def _cargar_actividad(self) -> None:
         """Una sola pasada por `asistencias` para saber que quincenas tienen
@@ -478,11 +482,12 @@ class SupabaseStore:
                 )
         return sorted(pendientes.values(), key=lambda p: p["nombre"])
 
-    def alta_maestros(self, pendientes: list[dict], edificio: str) -> int:
-        """Da de alta personas nuevas sin clasificar (tipo/turno/area en blanco).
-        Un codigo compartido no se guarda tal cual -- se identifican por nombre."""
+    def alta_maestros(self, pendientes: list[dict], edificio: str) -> list[Maestro]:
+        """Da de alta personas nuevas sin clasificar (tipo/turno/area en blanco) y regresa
+        a las que creo. Un codigo compartido no se guarda tal cual -- se identifican por nombre."""
         if not pendientes:
-            return 0
+            return []
+        creados: list[Maestro] = []
         siguiente = int(self._next_numero_interno().split("-")[1])
         payloads = []
         for offset, p in enumerate(pendientes):
@@ -500,8 +505,9 @@ class SupabaseStore:
             )
         for lote in _chunks(payloads, 200):
             resp = self.client.table("maestros").insert(lote).execute()
-            self.maestros.extend(self._maestro_from_row(row) for row in resp.data)
-        return len(payloads)
+            creados.extend(self._maestro_from_row(row) for row in resp.data)
+        self.maestros.extend(creados)
+        return creados
 
     def _asistencias_existentes(self, fecha_min: str, fecha_max: str) -> dict[tuple[str, str], dict]:
         """Todas las asistencias del rango, paginando (PostgREST devuelve

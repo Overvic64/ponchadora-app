@@ -20,8 +20,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from iconos import con_icono, etiqueta_icono
 from store import EDIFICIOS, TURNOS, store
 from theme import COLORS
+from widgets import SectionTitle
 
 
 class ConfiguracionView(QWidget):
@@ -31,9 +33,6 @@ class ConfiguracionView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Configuración")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        layout.addWidget(title)
 
         row = QHBoxLayout()
         row.setSpacing(16)
@@ -49,18 +48,20 @@ class ConfiguracionView(QWidget):
         card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(8)
 
-        title = QLabel("🏢  Edificios")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        card_layout.addWidget(title)
+        card_layout.addWidget(SectionTitle("edificios", "Edificios"))
 
         hint = QLabel("Catálogo fijo (se administra en Supabase).")
-        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px; font-style: italic;")
+        hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
         card_layout.addWidget(hint)
 
         for edificio in EDIFICIOS:
-            lbl = QLabel(f"•  {edificio}")
+            fila = QHBoxLayout()
+            fila.setSpacing(10)
+            fila.addWidget(etiqueta_icono("siguiente", 12, COLORS["text_muted"]))
+            lbl = QLabel(edificio)
             lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; padding: 3px 0;")
-            card_layout.addWidget(lbl)
+            fila.addWidget(lbl, 1)
+            card_layout.addLayout(fila)
 
         card_layout.addStretch()
         return card
@@ -72,9 +73,7 @@ class ConfiguracionView(QWidget):
         card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(10)
 
-        title = QLabel("⏰  Turnos")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        card_layout.addWidget(title)
+        card_layout.addWidget(SectionTitle("reloj", "Turnos"))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -83,7 +82,7 @@ class ConfiguracionView(QWidget):
         headers = ["Turno", "Hora entrada", "Hora salida", "Tolerancia (min)", ""]
         for col, header in enumerate(headers):
             lbl = QLabel(header)
-            lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: 700;")
+            lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600;")
             grid.addWidget(lbl, 0, col)
 
         self._rows = {}
@@ -97,7 +96,7 @@ class ConfiguracionView(QWidget):
             tolerancia_spin.setRange(0, 60)
             tolerancia_spin.setValue(datos["tolerancia_minutos"])
 
-            save_btn = QPushButton("Guardar")
+            save_btn = con_icono(QPushButton("Guardar"), "guardar")
             save_btn.setObjectName("secondaryButton")
             save_btn.setCursor(Qt.PointingHandCursor)
             save_btn.clicked.connect(

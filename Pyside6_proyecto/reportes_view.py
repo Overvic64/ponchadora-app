@@ -5,10 +5,14 @@
 """
 from __future__ import annotations
 
+import os
+
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -22,8 +26,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from exportar_excel import _par, corte_entrada, excel_disponible, exportar_f01, exportar_f02, exportar_f05
 from report_data import etiqueta_quincena, generar_quincena, quincenas_disponibles, resumen_concentrado
 from store import store
+from iconos import con_icono, etiqueta_icono, icono
 from theme import COLORS
 from widgets import size_table_to_contents
 
@@ -55,11 +61,12 @@ class ReportSelector(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
-        icon = QLabel("📄")
-        icon.setStyleSheet("font-size: 18px;")
+        icon = etiqueta_icono("archivo", 18, COLORS["text_secondary"])
         label = QLabel(nombre)
         label.setWordWrap(True)
-        label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px; font-weight: 700;")
+        label.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
         layout.addWidget(icon)
         layout.addWidget(label)
         self.set_active(False)
@@ -71,11 +78,11 @@ class ReportSelector(QFrame):
     def set_active(self, active: bool):
         if active:
             self.setStyleSheet(
-                f"#statCard {{ background-color: {COLORS['card_bg']}; border: 2px solid {COLORS['blue']}; border-radius: 12px; }}"
+                f"#statCard {{ background-color: {COLORS['card_bg']}; border: 1px solid {COLORS['accent']}; border-radius: 10px; }}"
             )
         else:
             self.setStyleSheet(
-                f"#statCard {{ background-color: {COLORS['card_bg']}; border: 1px solid {COLORS['border']}; border-radius: 12px; }}"
+                f"#statCard {{ background-color: {COLORS['card_bg']}; border: 1px solid {COLORS['border']}; border-radius: 10px; }}"
             )
 
 
@@ -90,14 +97,6 @@ class ReportesView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Reportes")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        subtitle = QLabel(
-            "Datos reales de Supabase (reporte_asistencias), combinados con lo que captures en Incidencias."
-        )
-        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
 
         selectors_row = QHBoxLayout()
         selectors_row.setSpacing(12)
@@ -114,25 +113,19 @@ class ReportesView(QWidget):
         header_row.addWidget(self.report_title)
         header_row.addStretch()
 
-        self.prev_btn = QPushButton("‹")
-        self.prev_btn.setObjectName("secondaryButton")
-        self.prev_btn.setFixedWidth(32)
-        self.prev_btn.setCursor(Qt.PointingHandCursor)
-        self.prev_btn.clicked.connect(self._quincena_anterior)
-        header_row.addWidget(self.prev_btn)
-
         self.quincena_label = QLabel("")
         self.quincena_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         header_row.addWidget(self.quincena_label)
 
-        self.next_btn = QPushButton("›")
-        self.next_btn.setObjectName("secondaryButton")
-        self.next_btn.setFixedWidth(32)
-        self.next_btn.setCursor(Qt.PointingHandCursor)
-        self.next_btn.clicked.connect(self._quincena_siguiente)
-        header_row.addWidget(self.next_btn)
+        # Lista desplegable con todas las quincenas (la mas reciente arriba): un clic en vez de ir de una en una.
+        self.quincena_combo = QComboBox()
+        self.quincena_combo.setFixedWidth(300)
+        self.quincena_combo.setMaxVisibleItems(14)
+        self.quincena_combo.setIconSize(QSize(16, 16))
+        self.quincena_combo.currentIndexChanged.connect(self._on_quincena_elegida)
+        header_row.addWidget(self.quincena_combo)
 
-        self.export_btn = QPushButton("⬇  Exportar a Excel")
+        self.export_btn = con_icono(QPushButton("Exportar a Excel"), "exportar")
         self.export_btn.setObjectName("secondaryButton")
         self.export_btn.setCursor(Qt.PointingHandCursor)
         self.export_btn.clicked.connect(self._exportar)
@@ -161,36 +154,48 @@ class ReportesView(QWidget):
         self.report_title.setText(REPORTES[clave]["nombre"])
         self.refresh()
 
-    def _quincena_anterior(self):
-        if self._quincena_idx > 0:
-            self._quincena_idx -= 1
-            self.refresh()
+    def _cargar_quincenas(self):
+        """Llena el desplegable (mas reciente primero) conservando la quincena que estaba elegida."""
+        previa = self._quincenas[self._quincena_idx] if 0 <= self._quincena_idx < len(self._quincenas) else None
+        self._quincenas = quincenas_disponibles()
+        if previa in self._quincenas:
+            self._quincena_idx = self._quincenas.index(previa)
+        else:
+            self._quincena_idx = len(self._quincenas) - 1
+        calendario = icono("calendario")
+        self.quincena_combo.blockSignals(True)
+        self.quincena_combo.clear()
+        for anio, mes, mitad in reversed(self._quincenas):
+            self.quincena_combo.addItem(calendario, f"Quincena {etiqueta_quincena(anio, mes, mitad)}")
+        if self._quincenas:
+            self.quincena_combo.setCurrentIndex(len(self._quincenas) - 1 - self._quincena_idx)
+        self.quincena_combo.blockSignals(False)
+        self.quincena_combo.setEnabled(bool(self._quincenas))
 
-    def _quincena_siguiente(self):
-        if self._quincena_idx < len(self._quincenas) - 1:
-            self._quincena_idx += 1
-            self.refresh()
+    def _on_quincena_elegida(self, indice):
+        if 0 <= indice < len(self._quincenas):
+            self._quincena_idx = len(self._quincenas) - 1 - indice
+            self._mostrar_quincena()
 
     def refresh(self):
-        self._quincenas = quincenas_disponibles()
+        self._cargar_quincenas()
+        self._mostrar_quincena()
+
+    def _mostrar_quincena(self):
         if not self._quincenas:
             self.quincena_label.setText("Sin asistencias importadas todavía")
             self.table.setRowCount(0)
             self.table.setColumnCount(0)
-            self.prev_btn.setEnabled(False)
-            self.next_btn.setEnabled(False)
             return
-        self._quincena_idx = min(self._quincena_idx, len(self._quincenas) - 1)
         anio, mes, mitad = self._quincenas[self._quincena_idx]
-        self.prev_btn.setEnabled(self._quincena_idx > 0)
-        self.next_btn.setEnabled(self._quincena_idx < len(self._quincenas) - 1)
 
         clave = self.active_report
         datos = REPORTES[clave]
         maestros = store.maestros_por_tipo(datos["tipos"])
 
         dias, celdas_por_maestro = generar_quincena(maestros, anio, mes, mitad)
-        self.quincena_label.setText(f"📅  {etiqueta_quincena(anio, mes, mitad)} — {len(dias)} días hábiles")
+        self._datos_quincena = (maestros, dias, celdas_por_maestro)
+        self.quincena_label.setText(f"{len(dias)} días hábiles")
 
         if datos["modo"] == "control":
             self._render_control(maestros, dias, celdas_por_maestro)
@@ -203,6 +208,8 @@ class ReportesView(QWidget):
             headers.append(f"{dia.day:02d}-E")
             headers.append(f"{dia.day:02d}-S")
 
+        self.table.clearSpans()
+        self.table.clearContents()
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(maestros))
@@ -211,38 +218,38 @@ class ReportesView(QWidget):
             self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, 48)
 
+        corte = corte_entrada()
+        self.table.verticalHeader().setDefaultSectionSize(40)
         for row, maestro in enumerate(maestros):
             self.table.setItem(row, 0, QTableWidgetItem(maestro.nombre))
             celdas = celdas_por_maestro.get(maestro.id, [])
             for day_index, celda in enumerate(celdas):
                 col_entrada = 1 + day_index * 2
                 col_salida = col_entrada + 1
-                if celda["tipo"] == "completo":
-                    entrada_item = QTableWidgetItem(celda["entrada"])
-                    salida_item = QTableWidgetItem(celda["salida"])
-                    if celda["retardo_min"] > 0:
+                # Igual que el Excel: solo minutos de retardo y claves (FI, FIE, FIS, P, C, I...), sin horas.
+                entrada, salida, unido = _par(celda, corte)
+                if celda["tipo"] in ("sin_datos", "no_aplica"):
+                    # Nadie tiene ponchada ese dia: no se ha importado ese periodo todavia.
+                    entrada, color = "—", COLORS["text_muted"]
+                elif celda["tipo"] == "completo":
+                    color = COLORS["orange"]
+                elif celda["tipo"] == "incidencia":
+                    color = COLORS["blue"]
+                else:
+                    color = COLORS["red"]
+                entrada_item = QTableWidgetItem(entrada)
+                salida_item = QTableWidgetItem(salida)
+                for item in (entrada_item, salida_item):
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setForeground(QColor(color))
+                    if item.text() not in ("", "—"):
                         font = QFont()
                         font.setBold(True)
-                        entrada_item.setFont(font)
-                        entrada_item.setForeground(QColor(COLORS["orange"]))
-                elif celda["tipo"] in ("sin_datos", "no_aplica"):
-                    # Nadie tiene ponchada ese dia: no se ha importado ese
-                    # periodo todavia. Se muestra neutral, no como problema.
-                    entrada_item = QTableWidgetItem("—")
-                    salida_item = QTableWidgetItem("")
-                    entrada_item.setForeground(QColor(COLORS["text_secondary"]))
-                else:
-                    clave = celda.get("clave", celda["tipo"])
-                    entrada_item = QTableWidgetItem(clave)
-                    salida_item = QTableWidgetItem("")
-                    entrada_item.setForeground(QColor(COLORS["red"]))
-                    font = QFont()
-                    font.setBold(True)
-                    entrada_item.setFont(font)
-                entrada_item.setTextAlignment(Qt.AlignCenter)
-                salida_item.setTextAlignment(Qt.AlignCenter)
+                        item.setFont(font)
                 self.table.setItem(row, col_entrada, entrada_item)
                 self.table.setItem(row, col_salida, salida_item)
+                if unido:
+                    self.table.setSpan(row, col_entrada, 1, 2)
         size_table_to_contents(self.table)
 
     def _exportar(self):
@@ -255,6 +262,47 @@ class ReportesView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Exportar reporte", nombre, "Excel (*.xlsx)")
         if not path:
             return
+        if excel_disponible():
+            self._exportar_formato_oficial(path, anio, mes, mitad)
+            return
+        QMessageBox.information(
+            self,
+            "Excel no encontrado",
+            "No se encontró Microsoft Excel en esta computadora, así que el reporte se guardará en una versión "
+            "simple (sin el formato oficial). Para el formato oficial, exporta desde una PC con Excel.",
+        )
+        self._exportar_simple(path, anio, mes, mitad)
+
+    def _exportar_formato_oficial(self, path, anio, mes, mitad):
+        """Llena el formato oficial (plantillas/F01, F02 o F05) con los datos de la quincena."""
+        maestros, dias, celdas_por_maestro = self._datos_quincena
+        # Personal dado de baja solo sale si tuvo ponchadas o incidencias en la quincena.
+        maestros = [
+            m for m in maestros
+            if m.activo or any(c["tipo"] in ("completo", "incompleto", "incidencia") for c in celdas_por_maestro.get(m.id, []))
+        ]
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if self.active_report == "F01":
+                exportar_f01(path, maestros, dias, celdas_por_maestro, anio, mes, mitad)
+            elif self.active_report == "F02":
+                exportar_f02(path, maestros, dias, celdas_por_maestro, anio, mes, mitad)
+            else:
+                exportar_f05(path, maestros, celdas_por_maestro, anio, mes, mitad)
+        except Exception as error:  # noqa: BLE001
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(
+                self,
+                "Error al exportar",
+                f"{error}\n\nSi el archivo ya está abierto en Excel, ciérralo e inténtalo de nuevo.",
+            )
+            return
+        QApplication.restoreOverrideCursor()
+        abrir = QMessageBox.question(self, "Exportado", f"Reporte guardado en:\n{path}\n\n¿Abrirlo ahora?")
+        if abrir == QMessageBox.Yes:
+            os.startfile(path)  # noqa: S606 - abre el archivo con Excel
+
+    def _exportar_simple(self, path, anio, mes, mitad):
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]
         filas = [
             [(self.table.item(r, c).text() if self.table.item(r, c) else "") for c in range(self.table.columnCount())]
@@ -272,6 +320,8 @@ class ReportesView(QWidget):
 
     def _render_concentrado(self, maestros, celdas_por_maestro):
         headers = ["Nombre", "Área / Carrera", "Días", "Horas", "Minutos"]
+        self.table.clearSpans()
+        self.table.clearContents()
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(maestros))

@@ -7,7 +7,6 @@ store.maestros por maestro_id.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from report_data import business_days, etiqueta_quincena, quincenas_disponibles
 from store import EDIFICIOS, TIPOS_PERSONAL, store
+from iconos import icono
 from theme import COLORS
 from widgets import size_table_to_contents
 
@@ -72,12 +72,6 @@ class AsistenciasView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Asistencias")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        subtitle = QLabel("Datos en vivo desde Supabase (vista reporte_asistencias).")
-        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
 
         self.quincena_label = QLabel("")
         self.quincena_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600;")
@@ -103,8 +97,8 @@ class AsistenciasView(QWidget):
         self.tipo_combo.currentIndexChanged.connect(self._apply_filters)
 
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("🔍  Buscar empleado...")
-        self.search_box.setObjectName("searchBoxLight")
+        self.search_box.setPlaceholderText("Buscar empleado")
+        self.search_box.addAction(icono("buscar"), QLineEdit.LeadingPosition)
         self.search_box.textChanged.connect(self._apply_filters)
 
         filters_row.addWidget(self.edificio_combo)
@@ -141,13 +135,13 @@ class AsistenciasView(QWidget):
         quincena = self._quincena if self._quincena in quincenas else (quincenas[-1] if quincenas else None)
 
         if quincena is None:
-            self.quincena_label.setText("📅  Sin asistencias importadas todavía")
+            self.quincena_label.setText("Sin asistencias importadas todavía")
             self._rows = []
         else:
             anio, mes, mitad = quincena
             dias = business_days(anio, mes, mitad)
             fecha_inicio, fecha_fin = (dias[0], dias[-1]) if dias else (None, None)
-            self.quincena_label.setText(f"📅  {etiqueta_quincena(anio, mes, mitad)}")
+            self.quincena_label.setText(etiqueta_quincena(anio, mes, mitad))
             self._rows = _load_rows(fecha_inicio, fecha_fin)
 
         self._apply_filters()

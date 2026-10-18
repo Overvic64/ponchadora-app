@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -22,7 +21,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import clasificador
 from core.attendance_import import CleaningResult, InputFileError, process_attendance_file
+from iconos import con_icono, etiqueta_icono
 from store import EDIFICIOS, store
 from theme import COLORS
 from widgets import StatCard
@@ -45,9 +46,7 @@ class DropZone(QFrame):
         layout.setAlignment(Qt.AlignCenter)
         layout.setSpacing(8)
 
-        icon = QLabel("📊")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet("font-size: 30px;")
+        icon = etiqueta_icono("nube", 32, COLORS["text_muted"])
 
         self.title_label = QLabel("Arrastra y suelta aquí tu archivo de Excel")
         self.title_label.setAlignment(Qt.AlignCenter)
@@ -57,17 +56,17 @@ class DropZone(QFrame):
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
 
-        browse_btn = QPushButton("⬆  Subir archivo")
+        browse_btn = con_icono(QPushButton("Subir archivo"), "subir", "#ffffff")
         browse_btn.setObjectName("primaryButton")
         browse_btn.setCursor(Qt.PointingHandCursor)
         browse_btn.setFixedWidth(160)
         browse_btn.clicked.connect(self._browse)
 
-        hint = QLabel("Formatos aceptados: .xlsx, .xls, .csv — crudo del lector o ya depurado")
+        hint = QLabel("Formatos aceptados: .xlsx, .xls y .csv, ya sea crudo del lector o ya depurado")
         hint.setAlignment(Qt.AlignCenter)
         hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
 
-        layout.addWidget(icon)
+        layout.addWidget(icon, alignment=Qt.AlignCenter)
         layout.addWidget(self.title_label)
         layout.addWidget(subtitle)
         layout.addWidget(browse_btn, alignment=Qt.AlignCenter)
@@ -97,12 +96,10 @@ class DropZone(QFrame):
 class WarningBanner(QFrame):
     def __init__(self, text, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(
-            "background-color: #fdf3e0; border: 1px solid #f0d9a8; border-radius: 8px;"
-        )
+        self.setStyleSheet(f"background-color: {COLORS['orange_bg']}; border: none; border-radius: 8px;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
-        icon = QLabel("⚠️")
+        icon = etiqueta_icono("aviso", 16, COLORS["orange"])
         label = QLabel(text)
         label.setWordWrap(True)
         label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
@@ -148,16 +145,6 @@ class ImportarExcelView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Importar Excel de ponchadas")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        subtitle = QLabel(
-            "Sube el export del lector biométrico (crudo) o el resumen ya depurado. "
-            "Se detecta el formato automáticamente."
-        )
-        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
         self.drop_card = QFrame()
         self.drop_card.setObjectName("statCard")
         drop_layout = QVBoxLayout(self.drop_card)
@@ -191,7 +178,7 @@ class ImportarExcelView(QWidget):
         results_header.addWidget(results_title)
         results_header.addStretch()
 
-        self.export_btn = QPushButton("⬇  Exportar a Excel")
+        self.export_btn = con_icono(QPushButton("Exportar a Excel"), "exportar")
         self.export_btn.setObjectName("secondaryButton")
         self.export_btn.setCursor(Qt.PointingHandCursor)
         self.export_btn.clicked.connect(self._export_result)
@@ -210,7 +197,7 @@ class ImportarExcelView(QWidget):
         )
         results_header.addWidget(self.origen_combo)
 
-        self.supabase_btn = QPushButton("☁  Enviar a Supabase")
+        self.supabase_btn = con_icono(QPushButton("Enviar a Supabase"), "nube", "#ffffff")
         self.supabase_btn.setObjectName("primaryButton")
         self.supabase_btn.setCursor(Qt.PointingHandCursor)
         self.supabase_btn.clicked.connect(self._enviar_supabase)
@@ -266,25 +253,25 @@ class ImportarExcelView(QWidget):
         range_text = f"{date_range[0]} a {date_range[1]}" if date_range else "-"
 
         cards = [
-            StatCard("📄", "Registros originales", result.input_count, icon_bg="#e8f0fe"),
+            StatCard("archivo", "Registros originales", result.input_count, tone="neutral"),
         ]
         if not result.already_clean:
-            cards.append(StatCard("🧹", "Duplicados descartados", result.duplicate_count, icon_bg="#fdece0"))
-            cards.append(StatCard("⏱", "Descartados por ventana (5 min)", result.window_discard_count, icon_bg="#fdece0"))
-        cards.append(StatCard("⚠️", "Filas inválidas", result.invalid_count, icon_bg="#fde8e8"))
-        cards.append(StatCard("👥", "Empleados únicos", result.unique_employees, icon_bg="#e6f7ec"))
+            cards.append(StatCard("limpieza", "Duplicados descartados", result.duplicate_count, tone="orange"))
+            cards.append(StatCard("reloj", "Descartados por ventana (5 min)", result.window_discard_count, tone="orange"))
+        cards.append(StatCard("aviso", "Filas inválidas", result.invalid_count, tone="red"))
+        cards.append(StatCard("personas", "Empleados únicos", result.unique_employees, tone="green"))
 
         for card in cards:
             self.stats_row.addWidget(card)
         self.stats_row.addStretch()
 
-        range_label = QLabel(f"📅 Rango de fechas: {range_text}")
+        range_label = QLabel(f"Rango de fechas: {range_text}")
         range_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         self.warning_container.addWidget(range_label)
 
         if result.shared_codes:
             names_preview = "; ".join(
-                f"{codigo} → {', '.join(nombres[:3])}{'…' if len(nombres) > 3 else ''}"
+                f"{codigo}: {', '.join(nombres[:3])}{'…' if len(nombres) > 3 else ''}"
                 for codigo, nombres in list(result.shared_codes.items())[:5]
             )
             more = len(result.shared_codes) - 5
@@ -300,40 +287,44 @@ class ImportarExcelView(QWidget):
         self.preview_table.load(result.daily_summary, result.shared_codes)
         self.results_card.setVisible(True)
 
-    def _ofrecer_alta_empleados(self, codigos_compartidos: set[str]) -> bool:
-        """Si el archivo trae personas que no existen en la base, ofrece darlas
-        de alta. Regresa False si el usuario cancela el envio."""
+    def _edificio_por_omision(self) -> str:
+        """Edificio de los empleados nuevos: el del ponchador de origen si se indico; si el
+        archivo junta varios lectores no hay forma de saberlo y se usa Rectoría."""
+        origen = self.origen_combo.currentText()
+        if origen != ORIGEN_GLOBAL:
+            return origen
+        return "Rectoría" if "Rectoría" in EDIFICIOS else EDIFICIOS[0]
+
+    def _registrar_personal_nuevo(self, codigos_compartidos: set[str]) -> list | None:
+        """Da de alta sin preguntar a las personas del archivo que no estan en la base.
+        Regresa a las que creo ([] si no habia), o None si fallo el alta."""
         pendientes = store.empleados_sin_registrar(self.result.daily_summary, codigos_compartidos)
         if not pendientes:
-            return True
-        ejemplos = "\n".join(f"• {p['nombre']} ({p['codigo']})" for p in pendientes[:10])
-        if len(pendientes) > 10:
-            ejemplos += f"\n... y {len(pendientes) - 10} más."
-        respuesta = QMessageBox.question(
-            self, "Empleados nuevos",
-            f"{len(pendientes)} persona(s) del archivo no están registradas:\n\n{ejemplos}\n\n"
-            "¿Darlas de alta ahora? Quedarán 'sin clasificar' (tipo, turno y área en blanco) para "
-            "que las completes en Profesores/Administrativos.\n\n"
-            "Si eliges No, sus ponchadas no se subirán.",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-        )
-        if respuesta == QMessageBox.Cancel:
-            return False
-        if respuesta == QMessageBox.No:
-            return True
-        edificio, ok = QInputDialog.getItem(
-            self, "Edificio inicial",
-            "Edificio que se les asignará (lo puedes corregir después por persona):",
-            EDIFICIOS, 0, False,
-        )
-        if not ok:
-            return False
+            return []
         try:
-            store.alta_maestros(pendientes, edificio)
+            return store.alta_maestros(pendientes, self._edificio_por_omision())
         except Exception as error:  # noqa: BLE001
-            QMessageBox.critical(self, "Error al dar de alta", str(error))
-            return False
-        return True
+            QMessageBox.critical(self, "Error al dar de alta al personal nuevo", str(error))
+            return None
+
+    def _clasificar_nuevos(self, nuevos: list) -> str:
+        """Clasifica (tipo, turno, area) al personal recien dado de alta con las ponchadas que
+        acaban de subirse. Regresa el texto para el aviso final."""
+        if not nuevos:
+            return ""
+        edificio = self._edificio_por_omision()
+        try:
+            propuestas, _ = clasificador.clasificar_pendientes(nuevos)
+        except Exception as error:  # noqa: BLE001
+            return (
+                f"\n\nSe registraron {len(nuevos)} persona(s) nueva(s) en {edificio}, pero no se pudieron "
+                f"clasificar solas ({error}). Puedes hacerlo en Personal."
+            )
+        return (
+            f"\n\nPersonal nuevo registrado automáticamente: {len(nuevos)} (edificio {edificio}).\n"
+            f"Clasificación: {clasificador.resumen(propuestas)}.\n"
+            "Revisa el edificio y el tipo en Personal si algo no es correcto."
+        )
 
     def _enviar_supabase(self):
         if self.result is None:
@@ -357,7 +348,8 @@ class ImportarExcelView(QWidget):
             return
 
         codigos_compartidos = set(self.result.shared_codes)
-        if not self._ofrecer_alta_empleados(codigos_compartidos):
+        nuevos = self._registrar_personal_nuevo(codigos_compartidos)
+        if nuevos is None:
             return
 
         try:
@@ -389,6 +381,7 @@ class ImportarExcelView(QWidget):
             mensaje += f"\n\nNo se subieron (empleado no registrado o nombre ambiguo):\n{ejemplos}"
             if len(resultado["sin_match"]) > 10:
                 mensaje += f"\n... y {len(resultado['sin_match']) - 10} más."
+        mensaje += self._clasificar_nuevos(nuevos)
         QMessageBox.information(self, "Enviado a Supabase", mensaje)
 
     def _export_result(self):

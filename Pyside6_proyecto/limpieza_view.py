@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QHeaderView, QLabel, QTableWi
 
 from store import store
 from theme import COLORS
-from widgets import StatCard, size_table_to_contents
+from widgets import SectionTitle, StatCard, size_table_to_contents
 
 
 class LimpiezaView(QWidget):
@@ -16,12 +16,6 @@ class LimpiezaView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Limpieza de registros")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
-        subtitle = QLabel("Historial real de archivos enviados a Supabase y cuántos registros se conservaron.")
-        subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
 
         self.stats_row = QHBoxLayout()
         self.stats_row.setSpacing(16)
@@ -33,9 +27,7 @@ class LimpiezaView(QWidget):
         table_layout.setContentsMargins(18, 16, 18, 16)
         table_layout.setSpacing(10)
 
-        table_title = QLabel("📄  Importaciones realizadas")
-        table_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        table_layout.addWidget(table_title)
+        table_layout.addWidget(SectionTitle("archivos", "Importaciones realizadas"))
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
@@ -73,10 +65,10 @@ class LimpiezaView(QWidget):
         total_descartados = sum(r.descartados for r in history)
 
         cards = [
-            StatCard("📥", "Importaciones", len(history), icon_bg="#e8f0fe"),
-            StatCard("📄", "Registros originales", total_originales, icon_bg="#e8f0fe"),
-            StatCard("✅", "Conservados", total_conservados, icon_bg="#e6f7ec"),
-            StatCard("🧹", "Descartados", total_descartados, icon_bg="#fdece0"),
+            StatCard("importar", "Importaciones", len(history), tone="blue"),
+            StatCard("archivo", "Registros originales", total_originales, tone="neutral"),
+            StatCard("ok", "Conservados", total_conservados, tone="green"),
+            StatCard("limpieza", "Descartados", total_descartados, tone="orange"),
         ]
         for card in cards:
             self.stats_row.addWidget(card)

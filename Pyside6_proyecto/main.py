@@ -2,9 +2,11 @@
 Sistema de Control de Asistencia y Ponchador
 """
 import sys
+import tempfile
+from pathlib import Path
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QValueAxis
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -25,29 +28,56 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from asistencias_view import AsistenciasView
-from configuracion_view import ConfiguracionView
-from importar_view import ImportarExcelView
-from incidencias_view import IncidenciasView
-from limpieza_view import LimpiezaView
-from personas_view import PersonasView
-from report_data import etiqueta_quincena, quincenas_disponibles, resumen_global
-from reportes_view import ReportesView
-from store import store
-from theme import COLORS
-from widgets import StatCard
+try:
+    from store import store  # se conecta a Supabase al importarse
+except Exception as error:  # noqa: BLE001 - sin .env, sin internet, claves malas...
+    _app = QApplication(sys.argv)
+    QMessageBox.critical(
+        None,
+        "No se pudo conectar a Supabase",
+        f"{error}\n\nRevisa el archivo .env (SUPABASE_URL y SUPABASE_KEY) y tu conexión a internet.",
+    )
+    sys.exit(1)
+
+from asistencias_view import AsistenciasView  # noqa: E402
+from configuracion_view import ConfiguracionView  # noqa: E402
+from iconos import con_icono, etiqueta_icono, icono  # noqa: E402
+from importar_view import ImportarExcelView  # noqa: E402
+from incidencias_view import IncidenciasView  # noqa: E402
+from limpieza_view import LimpiezaView  # noqa: E402
+from personas_view import PersonasView  # noqa: E402
+from report_data import etiqueta_quincena, quincenas_disponibles, resumen_global  # noqa: E402
+from reportes_view import ReportesView  # noqa: E402
+from theme import COLORS  # noqa: E402
+from widgets import SectionTitle, StatCard, con_sombra  # noqa: E402
 
 NAV_ITEMS = [
-    ("🏠", "Inicio"),
-    ("📄", "Importar Excel"),
-    ("🧹", "Limpieza de registros"),
-    ("📅", "Asistencias"),
-    ("⚠️", "Incidencias"),
-    ("📊", "Reportes"),
-    ("👥", "Profesores"),
-    ("👤", "Administrativos"),
-    ("⚙️", "Configuración"),
+    ("inicio", "Inicio"),
+    ("importar", "Importar Excel"),
+    ("limpieza", "Limpieza de registros"),
+    ("asistencias", "Asistencias"),
+    ("incidencias", "Incidencias"),
+    ("reportes", "Reportes"),
+    ("profesores", "Profesores"),
+    ("administrativos", "Administrativos"),
+    ("configuracion", "Configuración"),
 ]
+
+
+# Una linea por pantalla: para que cualquiera entienda para que sirve sin preguntar.
+PAGE_HELP = [
+    "Resumen de la quincena y por dónde seguir",
+    "Sube el Excel del lector y revísalo antes de guardarlo",
+    "Historial de archivos importados y registros depurados",
+    "Entradas y salidas de cada persona, con filtros",
+    "Permisos, comisiones y retardos por justificar",
+    "Reportes oficiales F01, F02 y F05 listos para exportar",
+    "Profesores de tiempo completo y de asignatura",
+    "Personal administrativo",
+    "Edificios y horarios de los turnos",
+]
+
+PAGINAS_CON_QUINCENA = {0, 3, 4}  # Inicio, Asistencias, Incidencias
 
 
 def _clear_layout(layout):
@@ -83,55 +113,54 @@ class Sidebar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
-        self.setFixedWidth(230)
+        self.setFixedWidth(236)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 20, 0, 16)
+        layout.setContentsMargins(14, 22, 14, 16)
         layout.setSpacing(4)
 
         logo_row = QHBoxLayout()
-        logo_row.setContentsMargins(20, 0, 20, 24)
-        logo_icon = QLabel("🎓")
-        logo_icon.setStyleSheet("font-size: 22px;")
-        logo_text = QLabel("Sistema de Control\nde Asistencia")
+        logo_row.setContentsMargins(8, 0, 8, 22)
+        logo_row.setSpacing(10)
+        logo_row.addWidget(etiqueta_icono("logo", 26, COLORS["primary"]))
+        logo_text = QLabel("Control de Asistencia")
         logo_text.setStyleSheet(
-            f"color: {COLORS['sidebar_text_active']}; font-size: 13px; font-weight: 600;"
+            f"color: {COLORS['text_primary']}; font-size: 14px; font-weight: 700; background: transparent;"
         )
-        logo_row.addWidget(logo_icon)
         logo_row.addWidget(logo_text)
         logo_row.addStretch()
         layout.addLayout(logo_row)
 
         self.nav_buttons = []
-        for i, (icon, text) in enumerate(NAV_ITEMS):
-            btn = QPushButton(f"  {icon}   {text}")
+        for i, (nombre_icono, text) in enumerate(NAV_ITEMS):
+            btn = QPushButton(f"  {text}")
             btn.setCheckable(True)
-            btn.setChecked(i == 0)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setObjectName("navButton")
-            btn.setProperty("active", i == 0)
+            btn.setIconSize(QSize(18, 18))
+            btn.setProperty("icono", nombre_icono)
             btn.clicked.connect(lambda _, b=btn, idx=i: self._select(b, idx))
             layout.addWidget(btn)
             self.nav_buttons.append(btn)
+        self._marcar(self.nav_buttons[0])
 
         layout.addStretch()
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(f"background-color: {COLORS['sidebar_bg_hover']}; max-height:1px;")
-        layout.addWidget(sep)
-
-        footer = QLabel("v1.0.0\nSistema Institucional\n2026")
-        footer.setStyleSheet(f"color: {COLORS['sidebar_text']}; font-size: 11px; padding: 12px 20px 0 20px;")
+        footer = QLabel("Versión 1.0.0")
+        footer.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; padding: 0 10px; background: transparent;")
         layout.addWidget(footer)
 
-    def _select(self, selected_btn, index):
+    def _marcar(self, selected_btn):
         for btn in self.nav_buttons:
             active = btn is selected_btn
             btn.setChecked(active)
             btn.setProperty("active", active)
+            btn.setIcon(icono(btn.property("icono"), COLORS["primary"] if active else COLORS["text_secondary"]))
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+
+    def _select(self, selected_btn, index):
+        self._marcar(selected_btn)
         self.page_changed.emit(index)
 
 
@@ -146,56 +175,53 @@ class TopBar(QFrame):
         self._quincenas: list[tuple[int, int, str]] = []
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(24, 0, 24, 0)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 0, 28, 0)
+        layout.setSpacing(14)
 
-        title = QLabel("Sistema de Control de Asistencia y Ponchador")
-        title.setStyleSheet("color: white; font-size: 16px; font-weight: 600;")
-        sub = QLabel("Institución Educativa")
-        sub.setStyleSheet("color: rgba(255,255,255,0.65); font-size: 11px;")
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(0)
-        title_box.addWidget(title)
-        title_box.addWidget(sub)
-        layout.addLayout(title_box)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Buscar empleado")
+        self.search.setObjectName("searchBox")
+        self.search.setFixedWidth(340)
+        self.search.addAction(icono("buscar"), QLineEdit.LeadingPosition)
+        self.search.returnPressed.connect(lambda: self.busqueda.emit(self.search.text().strip()))
+        layout.addWidget(self.search)
 
         layout.addStretch()
 
         self.quincena_combo = QComboBox()
         self.quincena_combo.setObjectName("quincenaBox")
-        self.quincena_combo.setFixedWidth(260)
+        self.quincena_combo.setFixedWidth(310)
+        self.quincena_combo.setIconSize(QSize(16, 16))
         self.quincena_combo.currentIndexChanged.connect(self._on_index_changed)
         layout.addWidget(self.quincena_combo)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("🔍  Buscar empleado y Enter...")
-        self.search.setObjectName("searchBox")
-        self.search.setFixedWidth(220)
-        self.search.returnPressed.connect(lambda: self.busqueda.emit(self.search.text().strip()))
-        layout.addWidget(self.search)
-
-        avatar = QLabel("👤")
-        avatar.setStyleSheet(
-            "background-color: rgba(255,255,255,0.15); border-radius: 16px;"
-            "font-size: 15px; padding: 4px 8px;"
-        )
+        avatar = QFrame()
+        avatar.setFixedSize(36, 36)
+        avatar.setStyleSheet(f"background-color: {COLORS['accent_soft']}; border-radius: 18px; border: none;")
+        avatar_layout = QHBoxLayout(avatar)
+        avatar_layout.setContentsMargins(0, 0, 0, 0)
+        avatar_layout.addWidget(etiqueta_icono("usuario", 18, COLORS["primary"]), alignment=Qt.AlignCenter)
         user_box = QVBoxLayout()
         user_box.setSpacing(0)
+        user_box.addStretch()
         name = QLabel("Admin")
-        name.setStyleSheet("color: white; font-size: 12px; font-weight: 600;")
+        name.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 600;")
         role = QLabel("Administrador")
-        role.setStyleSheet("color: rgba(255,255,255,0.65); font-size: 10px;")
+        role.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         user_box.addWidget(name)
         user_box.addWidget(role)
+        user_box.addStretch()
 
         user_row = QHBoxLayout()
-        user_row.setSpacing(8)
+        user_row.setSpacing(10)
         user_row.addWidget(avatar)
         user_row.addLayout(user_box)
         layout.addLayout(user_row)
 
         self.set_quincenas(quincenas_disponibles())
+
+    def mostrar_selector_quincena(self, visible: bool):
+        self.quincena_combo.setVisible(visible)
 
     def quincena_actual(self) -> tuple[int, int, str] | None:
         index = self.quincena_combo.currentIndex()
@@ -207,13 +233,14 @@ class TopBar(QFrame):
         no se queden mostrando un periodo distinto al del selector."""
         previa = self.quincena_actual()
         self._quincenas = quincenas
+        calendario = icono("calendario")
         self.quincena_combo.blockSignals(True)
         self.quincena_combo.clear()
         if not quincenas:
-            self.quincena_combo.addItem("📅  Sin asistencias importadas")
+            self.quincena_combo.addItem(calendario, "Sin asistencias importadas")
         else:
             for anio, mes, mitad in quincenas:
-                self.quincena_combo.addItem(f"📅  Quincena: {etiqueta_quincena(anio, mes, mitad)}")
+                self.quincena_combo.addItem(calendario, f"Quincena {etiqueta_quincena(anio, mes, mitad)}")
             index = quincenas.index(previa) if previa in quincenas else len(quincenas) - 1
             self.quincena_combo.setCurrentIndex(index)
         self.quincena_combo.blockSignals(False)
@@ -224,6 +251,26 @@ class TopBar(QFrame):
     def _on_index_changed(self, index):
         if 0 <= index < len(self._quincenas):
             self.quincena_changed.emit(self._quincenas[index])
+
+
+class PageHeader(QWidget):
+    """Titulo grande de la pantalla y una linea que explica para que sirve (debajo de la barra superior)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        caja = QVBoxLayout(self)
+        caja.setContentsMargins(28, 20, 28, 4)
+        caja.setSpacing(2)
+        self.title = QLabel("")
+        self.title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 24px; font-weight: 700;")
+        self.subtitle = QLabel("")
+        self.subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px;")
+        caja.addWidget(self.title)
+        caja.addWidget(self.subtitle)
+
+    def set_titulo(self, texto: str, ayuda: str = ""):
+        self.title.setText(texto)
+        self.subtitle.setText(ayuda)
 
 
 def _make_chart(datos: list[tuple[str, dict]]):
@@ -274,6 +321,7 @@ def _make_chart(datos: list[tuple[str, dict]]):
     view = QChartView(chart)
     view.setRenderHint(QPainter.Antialiasing)
     view.setStyleSheet("background: transparent;")
+    view.setFixedHeight(250)  # sin esto cambia de tamano al redibujarse con la ventana abierta y estira el bloque
     return view
 
 
@@ -285,71 +333,68 @@ class IncidenciasChartCard(QFrame):
         layout.setContentsMargins(18, 16, 18, 12)
         layout.setSpacing(8)
 
-        title = QLabel("📈  Incidencias por quincena")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        layout.addWidget(title)
+        layout.addWidget(SectionTitle("grafica", "Incidencias por quincena"))
         layout.addWidget(_make_chart(datos))
 
 
-class UploadCard(QFrame):
-    def __init__(self, on_click, parent=None):
+class WorkflowCard(QFrame):
+    """Los tres pasos de siempre, como botones: el usuario nuevo sabe por donde empezar."""
+
+    PASOS = [
+        ("importar", "Importa las ponchadas", "Sube el Excel del lector biométrico", 1),
+        ("incidencias", "Revisa retardos y faltas", "Justifica permisos y cambios de turno", 4),
+        ("reportes", "Exporta los reportes", "F01, F02 y F05 listos para imprimir", 5),
+    ]
+
+    def __init__(self, navigate, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
-        self.setCursor(Qt.PointingHandCursor)
+        con_sombra(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
-
-        title = QLabel("📄  Cargar archivo Excel de ponchadas")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        layout.addWidget(title)
-
-        drop = QFrame()
-        drop.setObjectName("dropZone")
-        drop_layout = QVBoxLayout(drop)
-        drop_layout.setAlignment(Qt.AlignCenter)
-        drop_layout.setSpacing(8)
-
-        icon = QLabel("📊")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet("font-size: 30px;")
-        text1 = QLabel("Ve a la pantalla de importación")
-        text1.setAlignment(Qt.AlignCenter)
-        text1.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: 600;")
-        text2 = QLabel("ahí subes y depuras el Excel de ponchadas")
-        text2.setAlignment(Qt.AlignCenter)
-        text2.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
-
-        upload_btn = QPushButton("⬆  Ir a Importar Excel")
-        upload_btn.setObjectName("primaryButton")
-        upload_btn.setCursor(Qt.PointingHandCursor)
-        upload_btn.setFixedWidth(180)
-        upload_btn.clicked.connect(on_click)
-
-        drop_layout.addWidget(icon)
-        drop_layout.addWidget(text1)
-        drop_layout.addWidget(text2)
-        drop_layout.addWidget(upload_btn, alignment=Qt.AlignCenter)
-
-        layout.addWidget(drop)
-        self._on_click = on_click
-
-    def mousePressEvent(self, event):
-        self._on_click()
-        super().mousePressEvent(event)
+        layout.setSpacing(10)
+        layout.addWidget(SectionTitle("lista", "Cómo trabajar cada quincena"))
+        for numero, (icono_nombre, titulo, descripcion, destino) in enumerate(self.PASOS, start=1):
+            paso = QPushButton()
+            paso.setObjectName("pasoButton")
+            paso.setMinimumHeight(64)
+            paso.setCursor(Qt.PointingHandCursor)
+            paso.clicked.connect(lambda _, d=destino: navigate(d))
+            fila = QHBoxLayout(paso)
+            fila.setContentsMargins(12, 10, 12, 10)
+            fila.setSpacing(12)
+            numero_lbl = QLabel(str(numero))
+            numero_lbl.setFixedSize(30, 30)
+            numero_lbl.setAlignment(Qt.AlignCenter)
+            numero_lbl.setStyleSheet(
+                f"background-color: {COLORS['accent_soft']}; color: {COLORS['primary']}; border-radius: 15px; "
+                "font-size: 13px; font-weight: 600;"
+            )
+            caja = QVBoxLayout()
+            caja.setSpacing(0)
+            t = QLabel(titulo)
+            t.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 600; background: transparent;")
+            d = QLabel(descripcion)
+            d.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
+            caja.addWidget(t)
+            caja.addWidget(d)
+            fila.addWidget(numero_lbl)
+            fila.addLayout(caja, 1)
+            fila.addWidget(etiqueta_icono(icono_nombre, 20, COLORS["accent"]))
+            layout.addWidget(paso)
+        layout.addStretch()
 
 
 class ProcessCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
+        con_sombra(self)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(18, 16, 18, 16)
         self._layout.setSpacing(14)
 
-        title = QLabel("✅  Pendientes de configuración")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        self._layout.addWidget(title)
+        self._layout.addWidget(SectionTitle("lista", "Pendientes de configuración"))
 
         self._steps_container = QVBoxLayout()
         self._steps_container.setSpacing(14)
@@ -364,13 +409,22 @@ class ProcessCard(QFrame):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(12)
 
-        badge = QLabel("✓" if done else str(index))
-        badge.setFixedSize(26, 26)
-        badge.setAlignment(Qt.AlignCenter)
-        bg = COLORS["green"] if done else COLORS["blue"]
-        badge.setStyleSheet(
-            f"background-color: {bg}; color: white; border-radius: 13px; font-size: 12px; font-weight: 700;"
-        )
+        # Los pasos si son una secuencia (importar, clasificar, asignar turno): hecho = palomita, pendiente = su numero.
+        if done:
+            badge = QFrame()
+            badge.setFixedSize(26, 26)
+            badge.setStyleSheet(f"background-color: {COLORS['green_bg']}; border-radius: 13px; border: none;")
+            badge_layout = QHBoxLayout(badge)
+            badge_layout.setContentsMargins(0, 0, 0, 0)
+            badge_layout.addWidget(etiqueta_icono("hecho", 14, COLORS["green"]), alignment=Qt.AlignCenter)
+        else:
+            badge = QLabel(str(index))
+            badge.setFixedSize(26, 26)
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setStyleSheet(
+                f"background-color: {COLORS['hover']}; color: {COLORS['text_secondary']}; "
+                f"border: 1px solid {COLORS['border_strong']}; border-radius: 13px; font-size: 12px; font-weight: 600;"
+            )
         row_layout.addWidget(badge)
 
         text_box = QVBoxLayout()
@@ -378,7 +432,7 @@ class ProcessCard(QFrame):
         t = QLabel(title)
         t.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: 600;")
         d = QLabel(desc)
-        d.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        d.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         d.setWordWrap(True)
         text_box.addWidget(t)
         text_box.addWidget(d)
@@ -428,28 +482,30 @@ class ProcessCard(QFrame):
 
 
 class ReportChip(QFrame):
-    def __init__(self, title, color, on_click, parent=None):
+    def __init__(self, title, on_click, parent=None):
         super().__init__(parent)
         self.setObjectName("reportChip")
-        self.setProperty("chipColor", color)
         self.setCursor(Qt.PointingHandCursor)
         self._on_click = on_click
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
 
-        icon = QLabel("📄")
-        icon.setStyleSheet("font-size: 15px;")
+        icon = etiqueta_icono("archivo", 18, COLORS["text_secondary"])
         label = QLabel(title)
         label.setWordWrap(True)
-        label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px; font-weight: 600;")
-        arrow = QLabel("›")
-        arrow.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 16px; font-weight: 700;")
+        label.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        arrow = etiqueta_icono("siguiente", 14, COLORS["text_muted"])
 
         layout.addWidget(icon)
         layout.addWidget(label, 1)
         layout.addWidget(arrow)
 
-        self.setStyleSheet(f"#reportChip {{ background-color: {color}; border-radius: 10px; }}")
+        self.setStyleSheet(
+            f"#reportChip {{ background-color: {COLORS['card_bg']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 8px; }} #reportChip:hover {{ background-color: {COLORS['hover']}; }}"
+        )
 
     def mousePressEvent(self, event):
         self._on_click()
@@ -458,31 +514,29 @@ class ReportChip(QFrame):
 
 class ReportsCard(QFrame):
     CHIPS = [
-        ("Concentrado Incidencias\nProfesor de Asignatura", "#e8f0fe", None),
-        ("Concentrado Incidencias\nAdministrativo y PTC", "#e6f7ec", "F05"),
-        ("Control Quincenal\nProfesor de Asignatura", "#e8f0fe", "F02"),
-        ("Control Quincenal\nAdministrativos y PTC", "#fdece0", "F01"),
+        ("Concentrado Incidencias\nAdministrativo y PTC", "F05"),
+        ("Control Quincenal\nProfesor de Asignatura", "F02"),
+        ("Control Quincenal\nAdministrativos y PTC", "F01"),
     ]
 
     def __init__(self, navigate, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
+        con_sombra(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        title = QLabel("📊  Reportes disponibles")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        layout.addWidget(title)
+        layout.addWidget(SectionTitle("reportes", "Reportes disponibles"))
 
         grid = QGridLayout()
         grid.setSpacing(10)
-        for i, (text, color, clave) in enumerate(self.CHIPS):
-            chip = ReportChip(text, color, lambda c=clave: navigate(5, c))
-            grid.addWidget(chip, i // 2, i % 2)
+        for i, (text, clave) in enumerate(self.CHIPS):
+            chip = ReportChip(text, lambda c=clave: navigate(5, c))
+            grid.addWidget(chip, i, 0)
         layout.addLayout(grid)
 
-        all_btn = QPushButton("📄  Ver todos los reportes")
+        all_btn = con_icono(QPushButton("Ver todos los reportes"), "reportes")
         all_btn.setObjectName("secondaryButton")
         all_btn.setCursor(Qt.PointingHandCursor)
         all_btn.clicked.connect(lambda: navigate(5))
@@ -490,22 +544,22 @@ class ReportsCard(QFrame):
 
 
 TIPO_COLORS = {
-    "Administrativo": ("#e6f7ec", "#16a34a"),
-    "Profesor de Tiempo Completo": ("#f3e8fd", "#7c3aed"),
-    "Profesor de Asignatura": ("#e8f0fe", "#2563eb"),
+    "Administrativo": (COLORS["green_bg"], COLORS["green"]),
+    "Profesor de Tiempo Completo": (COLORS["purple_bg"], COLORS["purple"]),
+    "Profesor de Asignatura": (COLORS["blue_bg"], COLORS["blue"]),
 }
 
 
 class TypeBadge(QWidget):
     def __init__(self, text, parent=None):
         super().__init__(parent)
-        bg, fg = TIPO_COLORS.get(text, ("#eee", "#666"))
+        bg, fg = TIPO_COLORS.get(text, (COLORS["hover"], COLORS["text_secondary"]))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         lbl = QLabel(text or "Sin clasificar")
         lbl.setStyleSheet(
-            f"background-color: {bg}; color: {fg}; border-radius: 8px; padding: 3px 10px;"
-            f"font-size: 10px; font-weight: 600;"
+            f"background-color: {bg}; color: {fg}; border-radius: 10px; padding: 3px 10px;"
+            f"font-size: 11px; font-weight: 500;"
         )
         layout.addWidget(lbl)
         layout.addStretch()
@@ -522,9 +576,7 @@ class RecordsTable(QFrame):
         layout.setSpacing(10)
 
         header_row = QHBoxLayout()
-        title = QLabel("📄  Últimas ponchadas registradas")
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        header_row.addWidget(title)
+        header_row.addWidget(SectionTitle("reloj", "Últimas ponchadas registradas"))
         header_row.addStretch()
         layout.addLayout(header_row)
 
@@ -571,24 +623,40 @@ class DashboardContent(QWidget):
         self._quincena_actual: tuple[int, int, str] | None = None
 
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(24, 20, 24, 24)
-        self._layout.setSpacing(16)
+        self._layout.setContentsMargins(28, 16, 28, 28)
+        self._layout.setSpacing(18)
 
-        self._stats_row = QHBoxLayout()
+        self._stats_row = QHBoxLayout()  # cuatro cifras con su tendencia
         self._stats_row.setSpacing(16)
         self._layout.addLayout(self._stats_row)
 
-        self._coverage_label = QLabel("")
-        self._coverage_label.setStyleSheet(
-            f"color: {COLORS['orange']}; font-size: 11px; font-weight: 600; padding: 2px 2px 0 2px;"
+        self._coverage = QFrame()
+        self._coverage.setStyleSheet(
+            f"background-color: {COLORS['orange_bg']}; border: none; border-radius: 8px;"
         )
-        self._coverage_label.setVisible(False)
-        self._layout.addWidget(self._coverage_label)
+        coverage_row = QHBoxLayout(self._coverage)
+        coverage_row.setContentsMargins(14, 10, 14, 10)
+        coverage_row.setSpacing(10)
+        coverage_row.addWidget(etiqueta_icono("aviso", 16, COLORS["orange"]))
+        self._coverage_label = QLabel("")
+        self._coverage_label.setWordWrap(True)
+        self._coverage_label.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 12px; background: transparent;"
+        )
+        coverage_row.addWidget(self._coverage_label, 1)
+        self._coverage.setVisible(False)
+        self._layout.addWidget(self._coverage)
+
+        grafica_row = QHBoxLayout()
+        grafica_row.setSpacing(16)
+        self._chart_container = QVBoxLayout()
+        grafica_row.addLayout(self._chart_container, 2)
+        grafica_row.addWidget(WorkflowCard(self.navigate), 1)
+        self._layout.addLayout(grafica_row)
 
         mid_row = QHBoxLayout()
         mid_row.setSpacing(16)
         self.process_card = ProcessCard()
-        mid_row.addWidget(UploadCard(lambda: self.navigate(1)), 1)
         mid_row.addWidget(self.process_card, 1)
         mid_row.addWidget(ReportsCard(self.navigate), 1)
         self._layout.addLayout(mid_row)
@@ -610,6 +678,7 @@ class DashboardContent(QWidget):
 
     def _rebuild_stats_and_chart(self):
         _clear_layout(self._stats_row)
+        _clear_layout(self._chart_container)
 
         quincenas = quincenas_disponibles()
         maestros = store.maestros
@@ -647,35 +716,33 @@ class DashboardContent(QWidget):
             pct = round((a - b) / b * 100)
             return f"{pct:+d}%", pct >= 0
 
+        ultimas = quincenas[-4:] if quincenas else []
+        datos_chart = [(_etiqueta_corta(*q), resumen(q)) for q in ultimas]
+
         cards_def = [
-            ("⏱", "Retardos", "retardos", "#fdece0"),
-            ("📄", "Permisos", "permisos", "#e8f0fe"),
-            ("✕", "Faltas", "faltas", "#fde8e8"),
-            ("👥", "Asistencias", "asistencias", "#e6f7ec"),
+            ("personas", "Asistencias", "asistencias", "blue"),
+            ("retardo", "Retardos", "retardos", "orange"),
+            ("falta", "Faltas", "faltas", "red"),
+            ("permiso", "Permisos", "permisos", "blue"),
         ]
-        left_col = QVBoxLayout()
-        left_col.setSpacing(16)
-        top_stats = QHBoxLayout()
-        top_stats.setSpacing(16)
-        for icon, titulo, clave, bg in cards_def:
+        for icon, titulo, clave, tono in cards_def:
             delta_text, delta_up = delta(clave)
-            top_stats.addWidget(StatCard(icon, titulo, actual[clave], delta_text, delta_up, bg, delta_suffix=suffix))
-        left_col.addLayout(top_stats)
-        self._stats_row.addLayout(left_col, 2)
+            serie = [float(r[clave]) for _, r in datos_chart]
+            self._stats_row.addWidget(
+                StatCard(icon, titulo, actual[clave], delta_text, delta_up, tono, delta_suffix=suffix, serie=serie)
+            )
 
         faltantes = actual["dias_totales"] - actual["dias_con_datos"]
         if actual_q and faltantes > 0:
             self._coverage_label.setText(
-                f"⚠️  {faltantes} de {actual['dias_totales']} días hábiles de esta quincena todavía no tienen "
-                "ninguna ponchada importada — no se cuentan como falta, solo se excluyen del total."
+                f"{faltantes} de {actual['dias_totales']} días hábiles de esta quincena todavía no tienen "
+                "ninguna ponchada importada. No se cuentan como falta; solo se excluyen del total."
             )
-            self._coverage_label.setVisible(True)
+            self._coverage.setVisible(True)
         else:
-            self._coverage_label.setVisible(False)
+            self._coverage.setVisible(False)
 
-        ultimas = quincenas[-4:] if quincenas else []
-        datos_chart = [(_etiqueta_corta(*q), resumen(q)) for q in ultimas]
-        self._stats_row.addWidget(IncidenciasChartCard(datos_chart), 2)
+        self._chart_container.addWidget(IncidenciasChartCard(datos_chart))
 
     def _rebuild_table(self):
         _clear_layout(self._table_container)
@@ -695,21 +762,6 @@ class DashboardContent(QWidget):
                 }
             )
         self._table_container.addWidget(RecordsTable(filas))
-
-
-class ComingSoonPage(QWidget):
-    def __init__(self, title, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignCenter)
-        icon = QLabel("🚧")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet("font-size: 40px;")
-        label = QLabel(f"{title} — en construcción")
-        label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 14px; font-weight: 600;")
-        layout.addWidget(icon)
-        layout.addWidget(label)
 
 
 class MainWindow(QMainWindow):
@@ -737,6 +789,10 @@ class MainWindow(QMainWindow):
         self.topbar.busqueda.connect(self._buscar_empleado)
         right.addWidget(self.topbar)
 
+        self.encabezado = PageHeader()
+        right.addWidget(self.encabezado)
+        self._titular(0)
+
         self.pages = QStackedWidget()
         self.page_indices = {}
         page_factories = {
@@ -750,9 +806,8 @@ class MainWindow(QMainWindow):
             7: lambda: PersonasView("Administrativos", ["Administrativo"]),
             8: ConfiguracionView,
         }
-        for i, (_icon, label) in enumerate(NAV_ITEMS):
-            factory = page_factories.get(i)
-            page = factory() if factory else ComingSoonPage(label)
+        for i in range(len(NAV_ITEMS)):
+            page = page_factories[i]()
             if i == 0:
                 self.dashboard = page
             if i == 3:
@@ -780,6 +835,10 @@ class MainWindow(QMainWindow):
         if report_key and nav_index == 5:
             self.reportes_page._select_report(report_key)
 
+    def _titular(self, nav_index):
+        titulo = "Bienvenido, Admin" if nav_index == 0 else NAV_ITEMS[nav_index][1]
+        self.encabezado.set_titulo(titulo, PAGE_HELP[nav_index])
+
     def _on_quincena_changed(self, quincena):
         self.dashboard.set_quincena(quincena)
         self.asistencias_page.set_quincena(quincena)
@@ -790,6 +849,9 @@ class MainWindow(QMainWindow):
         self.navigate(3)
 
     def _show_page(self, nav_index):
+        self._titular(nav_index)
+        # El selector de arriba solo manda en estas pantallas; en las demas (Reportes tiene el suyo) confunde.
+        self.topbar.mostrar_selector_quincena(nav_index in PAGINAS_CON_QUINCENA)
         self.pages.setCurrentIndex(self.page_indices[nav_index])
         scroll = self.pages.currentWidget()
         page = scroll.widget()
@@ -799,237 +861,368 @@ class MainWindow(QMainWindow):
             self.topbar.set_quincenas(quincenas_disponibles())
 
 
-STYLE_SHEET = f"""
+def _recursos_estilo() -> dict[str, str]:
+    """Imagenes que el QSS necesita por ruta (flecha de los desplegables, palomita de las casillas)."""
+    carpeta = Path(tempfile.gettempdir()) / "ponchador_ui"
+    carpeta.mkdir(exist_ok=True)
+    rutas = {}
+    for clave, nombre, color in (
+        ("chevron", "caret-down", COLORS["text_secondary"]),
+        ("chevron_up", "caret-up", COLORS["text_secondary"]),
+        ("check", "check-bold", "#ffffff"),
+    ):
+        ruta = carpeta / f"{clave}.png"
+        icono(nombre, color).pixmap(32, 32).save(str(ruta))
+        rutas[clave] = ruta.as_posix()
+    return rutas
+
+
+def construir_estilos() -> str:
+    """QSS de toda la aplicacion. Se arma despues de crear QApplication porque usa iconos."""
+    img = _recursos_estilo()
+    c = COLORS
+    return f"""
 QWidget {{
     font-family: 'Segoe UI';
+    font-size: 12px;
+    color: {c['text_primary']};
 }}
-QMainWindow, #scrollArea {{
-    background-color: {COLORS['page_bg']};
+QMainWindow {{
+    background-color: {c['page_bg']};
 }}
 QScrollArea {{
-    background-color: {COLORS['page_bg']};
+    background-color: {c['page_bg']};
     border: none;
 }}
-DashboardContent, ImportarExcelView, ComingSoonPage, LimpiezaView, AsistenciasView,
+DashboardContent, ImportarExcelView, LimpiezaView, AsistenciasView,
 IncidenciasView, ReportesView, PersonasView, ConfiguracionView {{
-    background-color: {COLORS['page_bg']};
+    background-color: {c['page_bg']};
 }}
-
-/* Sidebar */
-#sidebar {{
-    background-color: {COLORS['sidebar_bg']};
-    border: none;
-}}
-QPushButton#navButton {{
-    text-align: left;
-    color: {COLORS['sidebar_text']};
-    background-color: transparent;
-    border: none;
-    padding: 11px 20px;
-    font-size: 12.5px;
-    font-weight: 500;
-}}
-QPushButton#navButton:hover {{
-    background-color: {COLORS['sidebar_bg_hover']};
-    color: {COLORS['sidebar_text_active']};
-}}
-QPushButton#navButton[active="true"] {{
-    background-color: {COLORS['sidebar_active']};
-    color: {COLORS['sidebar_text_active']};
-    border-left: 3px solid white;
-    font-weight: 700;
-}}
-
-/* Topbar */
-#topbar {{
-    background-color: {COLORS['topbar_bg']};
-    border: none;
-}}
-QComboBox#quincenaBox {{
-    background-color: rgba(255,255,255,0.12);
+QToolTip {{
+    background-color: {c['primary']};
     color: white;
-    border: 1px solid rgba(255,255,255,0.25);
-    border-radius: 8px;
-    padding: 6px 10px;
-    font-size: 11px;
-}}
-QComboBox#quincenaBox QAbstractItemView {{
-    background-color: white;
-    color: {COLORS['text_primary']};
-}}
-QLineEdit#searchBox {{
-    background-color: rgba(255,255,255,0.12);
-    color: white;
-    border: 1px solid rgba(255,255,255,0.25);
-    border-radius: 8px;
-    padding: 6px 10px;
-    font-size: 11px;
-}}
-QLineEdit#searchBox:focus {{
-    background-color: rgba(255,255,255,0.2);
-}}
-
-QLineEdit#searchBoxLight {{
-    background-color: {COLORS['page_bg']};
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 8px;
-    padding: 7px 10px;
-    font-size: 11px;
-}}
-QLineEdit#searchBoxLight:focus {{
-    border: 1px solid {COLORS['blue']};
-}}
-QComboBox {{
-    background-color: {COLORS['page_bg']};
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 8px;
-    padding: 7px 10px;
-    font-size: 11px;
-}}
-QComboBox QAbstractItemView {{
-    background-color: white;
-    color: {COLORS['text_primary']};
-    selection-background-color: {COLORS['blue']};
-    selection-color: white;
-}}
-QDateEdit, QTimeEdit, QSpinBox {{
-    background-color: {COLORS['page_bg']};
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 8px;
-    padding: 6px 10px;
-    font-size: 11px;
-}}
-QDateEdit::drop-down {{
     border: none;
-    width: 20px;
-}}
-QDateEdit QAbstractItemView {{
-    background-color: white;
-    color: {COLORS['text_primary']};
-    selection-background-color: {COLORS['blue']};
-    selection-color: white;
-}}
-QCalendarWidget QWidget {{
-    background-color: white;
-    color: {COLORS['text_primary']};
-}}
-QCalendarWidget QToolButton {{
-    color: {COLORS['text_primary']};
-}}
-QLineEdit {{
-    color: {COLORS['text_primary']};
-    background-color: white;
-    border: 1px solid {COLORS['border']};
-    border-radius: 6px;
     padding: 5px 8px;
 }}
 
-/* Cards */
+/* Barra lateral */
+#sidebar {{
+    background-color: {c['sidebar_bg']};
+    border: none;
+    border-right: 1px solid {c['border']};
+}}
+QPushButton#navButton {{
+    text-align: left;
+    color: {c['sidebar_text']};
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 13px;
+    font-weight: 500;
+}}
+QPushButton#navButton:hover {{
+    background-color: {c['sidebar_bg_hover']};
+    color: {c['sidebar_text_active']};
+}}
+QPushButton#navButton[active="true"] {{
+    background-color: {c['sidebar_active']};
+    color: {c['sidebar_text_active']};
+    border-left: 3px solid {c['primary']};
+    font-weight: 600;
+}}
+
+/* Pasos del Inicio */
+QPushButton#pasoButton {{
+    background-color: white;
+    border: 1px solid {c['border']};
+    border-radius: 10px;
+    text-align: left;
+}}
+QPushButton#pasoButton:hover {{
+    background-color: {c['accent_soft']};
+    border-color: {c['accent']};
+}}
+
+/* Barra superior */
+#topbar {{
+    background-color: {c['topbar_bg']};
+    border: none;
+    border-bottom: 1px solid {c['border']};
+}}
+
+QLineEdit#searchBox {{
+    background-color: {c['hover']};
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 6px 10px;
+}}
+QLineEdit#searchBox:focus {{
+    background-color: white;
+    border: 2px solid {c['accent']};
+}}
+
+/* Campos */
+QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox {{
+    background-color: white;
+    color: {c['text_primary']};
+    border: 1px solid {c['border_strong']};
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    selection-background-color: {c['accent_soft']};
+    selection-color: {c['text_primary']};
+}}
+QDateEdit, QTimeEdit, QSpinBox {{
+    padding: 5px 10px;
+}}
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus, QSpinBox:focus {{
+    border: 2px solid {c['accent']};
+    padding: 6px 9px;
+}}
+QDateEdit QLineEdit, QTimeEdit QLineEdit, QSpinBox QLineEdit, QComboBox QLineEdit {{
+    border: none;
+    padding: 0;
+    background: transparent;
+}}
+QLineEdit::placeholder {{
+    color: {c['text_muted']};
+}}
+QComboBox::drop-down, QDateEdit::drop-down {{
+    border: none;
+    width: 26px;
+}}
+QComboBox::down-arrow, QDateEdit::down-arrow {{
+    image: url({img['chevron']});
+    width: 12px;
+    height: 12px;
+}}
+QTimeEdit::up-button, QSpinBox::up-button, QDateEdit::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 20px;
+    border: none;
+    background: transparent;
+}}
+QTimeEdit::down-button, QSpinBox::down-button, QDateEdit::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 20px;
+    border: none;
+    background: transparent;
+}}
+QTimeEdit::up-arrow, QSpinBox::up-arrow {{
+    image: url({img['chevron_up']});
+    width: 10px;
+    height: 10px;
+}}
+QTimeEdit::down-arrow, QSpinBox::down-arrow {{
+    image: url({img['chevron']});
+    width: 10px;
+    height: 10px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: white;
+    color: {c['text_primary']};
+    border: 1px solid {c['border']};
+    selection-background-color: {c['accent_soft']};
+    selection-color: {c['text_primary']};
+    outline: none;
+    padding: 4px;
+}}
+QCalendarWidget QWidget {{
+    background-color: white;
+    color: {c['text_primary']};
+}}
+QCalendarWidget QToolButton {{
+    color: {c['text_primary']};
+}}
+QCheckBox {{
+    spacing: 8px;
+    background: transparent;
+}}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1px solid {c['border_strong']};
+    border-radius: 4px;
+    background-color: white;
+}}
+QCheckBox::indicator:hover {{
+    border-color: {c['accent']};
+}}
+QCheckBox::indicator:checked {{
+    background-color: {c['accent']};
+    border-color: {c['accent']};
+    image: url({img['check']});
+}}
+
+/* Tarjetas */
 QFrame#statCard {{
-    background-color: {COLORS['card_bg']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 12px;
+    background-color: {c['card_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 10px;
 }}
 QFrame#dropZone {{
-    border: 2px dashed #c9d3e8;
+    border: 1px dashed {c['border_strong']};
     border-radius: 10px;
-    background-color: #f8faff;
+    background-color: #fafafa;
     padding: 22px;
 }}
 
+/* Botones */
+QPushButton {{
+    font-size: 12px;
+}}
 QPushButton#primaryButton {{
-    background-color: {COLORS['blue']};
+    background-color: {c['primary']};
     color: white;
     border: none;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 8px 14px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
 }}
 QPushButton#primaryButton:hover {{
-    background-color: #1d4ed8;
+    background-color: {c['primary_hover']};
+}}
+QPushButton#primaryButton:disabled {{
+    background-color: {c['border_strong']};
 }}
 QPushButton#secondaryButton {{
     background-color: white;
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
+    color: {c['text_primary']};
+    border: 1px solid {c['border_strong']};
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 8px 14px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
 }}
 QPushButton#secondaryButton:hover {{
-    background-color: #f2f4f9;
+    background-color: {c['hover']};
+}}
+QPushButton#secondaryButton:disabled {{
+    color: {c['text_muted']};
+    background-color: {c['page_bg']};
+}}
+QPushButton#tableButton {{
+    background-color: white;
+    color: {c['text_primary']};
+    border: 1px solid {c['border_strong']};
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+}}
+QPushButton#tableButton:hover {{
+    background-color: {c['hover']};
 }}
 
-/* Table */
+/* Tablas */
 QTableWidget {{
     border: none;
     background-color: white;
-    color: {COLORS['text_primary']};
-    gridline-color: {COLORS['border']};
-    font-size: 11.5px;
+    color: {c['text_primary']};
+    gridline-color: {c['border']};
+    font-size: 12px;
+    outline: none;
 }}
 QHeaderView::section {{
-    background-color: #f8f9fc;
-    color: {COLORS['text_secondary']};
+    background-color: #f1f5fa;
+    color: {c['text_secondary']};
     border: none;
-    border-bottom: 1px solid {COLORS['border']};
-    padding: 8px;
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
+    border-bottom: 1px solid {c['border']};
+    padding: 9px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+}}
+QTableWidget::item:hover {{
+    background-color: #f8fafc;
 }}
 QTableWidget::item {{
-    border-bottom: 1px solid {COLORS['border']};
-    padding-left: 4px;
+    border-bottom: 1px solid #eef2f7;
+    padding-left: 10px;
 }}
-QDialog {{
+
+/* Cuadros de dialogo */
+QDialog, QMessageBox {{
     background-color: white;
 }}
 QDialog QLabel, QDialog QCheckBox {{
-    color: {COLORS['text_primary']};
+    color: {c['text_primary']};
     font-size: 12px;
+    background: transparent;
 }}
 QDialog QScrollArea, QDialog QScrollArea > QWidget > QWidget {{
     background-color: white;
 }}
-QDialog QPushButton {{
+QDialog QPushButton, QMessageBox QPushButton {{
     background-color: white;
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 6px;
-    padding: 6px 18px;
+    color: {c['text_primary']};
+    border: 1px solid {c['border_strong']};
+    border-radius: 8px;
+    padding: 7px 18px;
     font-size: 12px;
+    min-width: 64px;
 }}
-QDialog QPushButton:hover {{
-    background-color: #f2f4f9;
+QDialog QPushButton:hover, QMessageBox QPushButton:hover {{
+    background-color: {c['hover']};
 }}
-QDialog QPushButton:default {{
-    background-color: {COLORS['blue']};
+QDialog QPushButton:default, QMessageBox QPushButton:default {{
+    background-color: {c['primary']};
     color: white;
     border: none;
 }}
-QPushButton#tableButton {{
-    background-color: white;
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 6px;
-    padding: 2px 6px;
-    font-size: 11px;
+
+/* Barras de desplazamiento */
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 2px;
 }}
-QPushButton#tableButton:hover {{
-    background-color: #f2f4f9;
+QScrollBar::handle:vertical {{
+    background: {c['border_strong']};
+    border-radius: 3px;
+    min-height: 32px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {c['text_muted']};
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+    margin: 2px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {c['border_strong']};
+    border-radius: 3px;
+    min-width: 32px;
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{
+    width: 0;
+    height: 0;
+}}
+QScrollBar::add-page, QScrollBar::sub-page {{
+    background: transparent;
 }}
 """
 
 
+class AjusteTablas(QObject):
+    """Los encabezados de las tablas quedan alineados a la izquierda, como su contenido (QSS no lo permite)."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Polish and isinstance(obj, QHeaderView):
+            obj.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        return False
+
+
 def main():
     app = QApplication(sys.argv)
-    app.setStyleSheet(STYLE_SHEET)
+    ajuste = AjusteTablas()
+    app.installEventFilter(ajuste)
+    app.setFont(QFont("Segoe UI", 10))
+    app.setStyleSheet(construir_estilos())
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

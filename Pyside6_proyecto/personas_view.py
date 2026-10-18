@@ -28,9 +28,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import clasificador
+from iconos import con_icono, icono
 from store import EDIFICIOS, TIPOS_PERSONAL, TURNOS, store
 from theme import COLORS
-from widgets import size_table_to_contents
+from widgets import SectionTitle, size_table_to_contents
 
 SIN_TURNO = "Sin turno"
 SIN_TIPO = "Sin clasificar"
@@ -113,11 +115,8 @@ class PersonasView(QWidget):
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel(titulo)
-        title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 700;")
         subtitle = QLabel(f"Tipos incluidos: {', '.join(tipos_permitidos)}")
         subtitle.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
-        layout.addWidget(title)
         layout.addWidget(subtitle)
 
         form_card = QFrame()
@@ -126,9 +125,7 @@ class PersonasView(QWidget):
         form_layout.setContentsMargins(18, 16, 18, 16)
         form_layout.setSpacing(12)
 
-        form_title = QLabel("➕  Agregar")
-        form_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        form_layout.addWidget(form_title)
+        form_layout.addWidget(SectionTitle("agregar", "Agregar"))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -167,7 +164,7 @@ class PersonasView(QWidget):
 
         save_row = QHBoxLayout()
         save_row.addStretch()
-        save_btn = QPushButton("💾  Guardar")
+        save_btn = con_icono(QPushButton("Guardar"), "guardar", "#ffffff")
         save_btn.setObjectName("primaryButton")
         save_btn.setCursor(Qt.PointingHandCursor)
         save_btn.clicked.connect(self._guardar)
@@ -183,14 +180,12 @@ class PersonasView(QWidget):
         list_layout.setSpacing(10)
 
         list_header = QHBoxLayout()
-        list_title = QLabel(f"👥  {titulo} registrados")
-        list_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 700;")
-        list_header.addWidget(list_title)
+        list_header.addWidget(SectionTitle("personas", f"{titulo} registrados"))
         list_header.addStretch()
 
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("🔍  Buscar por nombre o código...")
-        self.search_box.setObjectName("searchBoxLight")
+        self.search_box.setPlaceholderText("Buscar por nombre o código")
+        self.search_box.addAction(icono("buscar"), QLineEdit.LeadingPosition)
         self.search_box.setFixedWidth(240)
         self.search_box.textChanged.connect(lambda _: self.refresh())
         list_header.addWidget(self.search_box)
@@ -199,6 +194,13 @@ class PersonasView(QWidget):
         self.filtro_combo.addItems(["Todos", "Solo sin clasificar"])
         self.filtro_combo.currentIndexChanged.connect(lambda _: self.refresh())
         list_header.addWidget(self.filtro_combo)
+
+        auto_btn = con_icono(QPushButton("Clasificar automáticamente"), "clasificar")
+        auto_btn.setObjectName("secondaryButton")
+        auto_btn.setCursor(Qt.PointingHandCursor)
+        auto_btn.setToolTip("Deduce tipo, turno y área de quien no los tenga, con sus ponchadas y su edificio")
+        auto_btn.clicked.connect(self._clasificar_automaticamente)
+        list_header.addWidget(auto_btn)
         list_layout.addLayout(list_header)
 
         self.pendientes_label = QLabel("")
@@ -256,6 +258,30 @@ class PersonasView(QWidget):
         self.area_input.clear()
         self.refresh()
 
+    def _clasificar_automaticamente(self):
+        """Llena tipo, turno y area de quien no los tenga (nunca pisa lo ya capturado)."""
+        faltantes = [m for m in store.maestros if not m.tipo_personal or not m.turno or not m.area_carrera]
+        if not faltantes:
+            QMessageBox.information(self, "Todo clasificado", "Todo el personal ya tiene tipo, turno y área.")
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Clasificar automáticamente",
+            f"{len(faltantes)} persona(s) tienen algo en blanco (tipo, turno o área).\n\n"
+            "Se deducen de sus ponchadas y su edificio; lo que ya esté capturado no se toca. "
+            "Antes de guardar se hace un respaldo en la carpeta 'respaldos'.\n\n¿Continuar?",
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            propuestas, respaldo = clasificador.clasificar_pendientes(faltantes)
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "No se pudo clasificar", str(error))
+            return
+        self.refresh()
+        extra = f"\n\nRespaldo previo: {respaldo.name}" if respaldo else ""
+        QMessageBox.information(self, "Clasificación terminada", f"{clasificador.resumen(propuestas)}.{extra}")
+
     def _eliminar(self, maestro_id):
         confirm = QMessageBox.question(
             self, "Eliminar", "¿Eliminar este registro? Esta acción no se puede deshacer."
@@ -294,8 +320,8 @@ class PersonasView(QWidget):
 
         if sin_clasificar:
             self.pendientes_label.setText(
-                f"⚠️  {len(sin_clasificar)} empleado(s) sin tipo de personal. Aparecen aquí y en la otra "
-                "pantalla de personal hasta que los clasifiques con \"Editar\"."
+                f"{len(sin_clasificar)} empleado(s) sin tipo de personal. Aparecen aquí y en la otra "
+                "pantalla de personal hasta que los clasifiques con \"Editar\" o con \"Clasificar automáticamente\"."
             )
         self.pendientes_label.setVisible(bool(sin_clasificar))
 
@@ -326,10 +352,10 @@ class PersonasView(QWidget):
             edit_btn.clicked.connect(lambda _, pid=persona.id: self._editar(pid))
             self.table.setCellWidget(row, 6, edit_btn)
 
-            delete_btn = QPushButton("🗑")
+            delete_btn = con_icono(QPushButton(), "eliminar")
             delete_btn.setObjectName("tableButton")
             delete_btn.setCursor(Qt.PointingHandCursor)
-            delete_btn.setFixedWidth(32)
+            delete_btn.setFixedSize(34, 28)
             delete_btn.setToolTip("Eliminar")
             delete_btn.clicked.connect(lambda _, pid=persona.id: self._eliminar(pid))
             self.table.setCellWidget(row, 7, delete_btn)
