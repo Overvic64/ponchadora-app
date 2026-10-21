@@ -6,6 +6,8 @@ deshacer con `restaurar`).
 
 Reglas
   Tipo de personal
+    * Horario variable (la entrada o la salida cambia 1.5 h o mas de un dia a otro, con 8 dias o mas de
+      ponchadas) -> asignatura: es quien no tiene hora fija de entrada ni de salida.
     * Jornada de 5.5 h o mas entre su primera y ultima ponchada -> tiempo completo.
       Jornada de menos de 4.5 h -> asignatura.
     * Sin dato claro (una sola ponchada al dia, o entre 4.5 y 5.5 h): si poncha en la mitad
@@ -31,6 +33,8 @@ TIPO_ADMIN = "Administrativo"
 TIPO_PTC = "Profesor de Tiempo Completo"
 TIPO_ASIGNATURA = "Profesor de Asignatura"
 
+UMBRAL_VARIACION_HORAS = 1.5  # desviacion tipica de la hora de entrada o de salida
+DIAS_MIN_VARIACION = 8
 HORAS_JORNADA_COMPLETA = 5.5
 HORAS_JORNADA_CORTA = 4.5
 RATIO_TIEMPO_COMPLETO = 0.5
@@ -84,17 +88,24 @@ def _perfiles(filas: list[dict]) -> dict[str, dict]:
             if r["entrada"] and r["salida"] and r["salida"] > r["entrada"]
         ]
         entradas = [_segundos(r["entrada"]) / 3600 for r in registros if r["entrada"]]
+        salidas = [_segundos(r["salida"]) / 3600 for r in registros if r["salida"] and r["entrada"] and r["salida"] > r["entrada"]]
         perfiles[maestro_id] = {
             "dias": len(dias),
             "ratio": len(dias) / max(habiles_en_su_rango, 1),
             "horas": statistics.median(horas) if horas else None,
             "entrada": statistics.median(entradas) if entradas else None,
+            "variacion": max(
+                statistics.pstdev(entradas) if len(entradas) >= DIAS_MIN_VARIACION else 0,
+                statistics.pstdev(salidas) if len(salidas) >= DIAS_MIN_VARIACION else 0,
+            ),
         }
     return perfiles
 
 
 def _decidir_tipo(maestro: Maestro, perfil: dict) -> tuple[str, str]:
     horas, ratio = perfil["horas"], perfil["ratio"]
+    if perfil["variacion"] >= UMBRAL_VARIACION_HORAS:
+        return TIPO_ASIGNATURA, f"horario variable (cambia {perfil['variacion']:.1f} h de un día a otro) → asignatura"
     if horas is not None and horas >= HORAS_JORNADA_COMPLETA:
         completo, razon = True, f"jornada de {horas:.1f} h"
     elif horas is not None and 0 < horas < HORAS_JORNADA_CORTA:
@@ -107,6 +118,11 @@ def _decidir_tipo(maestro: Maestro, perfil: dict) -> tuple[str, str]:
     if (maestro.edificio or "").lower().startswith("docencia"):
         return TIPO_PTC, f"{razon}, edificio {maestro.edificio} → PTC"
     return TIPO_ADMIN, f"{razon}, edificio {maestro.edificio or 'sin edificio'} → administrativo"
+
+
+def le_falta_algo(m: Maestro) -> bool:
+    """Sin tipo, o (si no es de asignatura) sin turno o sin area. Asignatura no tiene turno ni area fijos."""
+    return not m.tipo_personal or (m.tipo_personal != TIPO_ASIGNATURA and (not m.turno or not m.area_carrera))
 
 
 def proponer(maestros: list[Maestro], filas: list[dict] | None = None) -> list[Propuesta]:
@@ -127,7 +143,7 @@ def proponer(maestros: list[Maestro], filas: list[dict] | None = None) -> list[P
             tipo, motivo = _decidir_tipo(maestro, perfil)
             propuesta.cambios["tipo_personal"] = tipo
             motivos.append(motivo)
-        if not maestro.turno and perfil["entrada"] is not None:
+        if not maestro.turno and tipo != TIPO_ASIGNATURA and perfil["entrada"] is not None:
             turno = "matutino" if perfil["entrada"] < corte else "vespertino"
             propuesta.cambios["turno"] = turno
             motivos.append(f"entra hacia las {int(perfil['entrada']):02d}:{int(perfil['entrada'] % 1 * 60):02d} → {turno}")
@@ -175,7 +191,7 @@ def restaurar(ruta: str | Path) -> int:
 def clasificar_pendientes(maestros: list[Maestro] | None = None) -> tuple[list[Propuesta], Path | None]:
     """Propone y aplica de una vez. Sin argumentos revisa a todo el personal al que le falte algo."""
     objetivo = maestros if maestros is not None else [
-        m for m in store.maestros if not m.tipo_personal or not m.turno or not m.area_carrera
+        m for m in store.maestros if le_falta_algo(m)
     ]
     propuestas = proponer(objetivo)
     return propuestas, aplicar(propuestas)

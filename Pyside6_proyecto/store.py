@@ -14,6 +14,7 @@ from datetime import date
 
 import pandas as pd
 
+from core.attendance_import import normalizar_nombre
 from core.supabase_client import get_client
 
 TIPOS_PERSONAL = ["Administrativo", "Profesor de Tiempo Completo", "Profesor de Asignatura"]
@@ -83,10 +84,6 @@ class ImportRecord:
     conservados: int
     descartados: int
     origen: str
-
-
-def _normalize_name(name: str) -> str:
-    return " ".join(name.strip().upper().split())
 
 
 def _chunks(items: list, size: int):
@@ -205,7 +202,7 @@ class SupabaseStore:
             "numero_interno": self._next_numero_interno(),
             "codigo_excel": codigo,
             "nombre": nombre,
-            "nombre_normalizado": _normalize_name(nombre),
+            "nombre_normalizado": normalizar_nombre(nombre),
             "edificio_id": self._edificio_id_by_nombre.get(edificio),
             "turno_id": turno or None,
             "turno_confirmado": bool(turno),
@@ -229,7 +226,7 @@ class SupabaseStore:
                 payload["edificio_id"] = self._edificio_id_by_nombre.get(value)
             elif key == "nombre":
                 payload["nombre"] = value
-                payload["nombre_normalizado"] = _normalize_name(value)
+                payload["nombre_normalizado"] = normalizar_nombre(value)
             else:
                 payload[column_map.get(key, key)] = value
         self.client.table("maestros").update(payload).eq("id", maestro_id).execute()
@@ -450,9 +447,9 @@ class SupabaseStore:
 
     def _indices_maestros(self) -> tuple[dict[str, str], dict[str, str]]:
         por_codigo = {m.codigo: m.id for m in self.maestros if m.codigo}
-        conteo = Counter(_normalize_name(m.nombre) for m in self.maestros)
+        conteo = Counter(normalizar_nombre(m.nombre) for m in self.maestros)
         por_nombre = {
-            _normalize_name(m.nombre): m.id for m in self.maestros if conteo[_normalize_name(m.nombre)] == 1
+            normalizar_nombre(m.nombre): m.id for m in self.maestros if conteo[normalizar_nombre(m.nombre)] == 1
         }
         return por_codigo, por_nombre
 
@@ -498,9 +495,10 @@ class SupabaseStore:
                     "numero_interno": numero_interno,
                     "codigo_excel": codigo,
                     "nombre": p["nombre"],
-                    "nombre_normalizado": _normalize_name(p["nombre"]),
+                    "nombre_normalizado": normalizar_nombre(p["nombre"]),
                     "edificio_id": self._edificio_id_by_nombre.get(edificio),
                     "turno_confirmado": False,
+                    **({"tipo_personal": p["tipo_personal"]} if p.get("tipo_personal") else {}),
                 }
             )
         for lote in _chunks(payloads, 200):

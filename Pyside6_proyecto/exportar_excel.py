@@ -134,7 +134,7 @@ class _Excel:
         self.app.EnableEvents = False
         return self.app
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_):
         try:
             self.app.Quit()
         except Exception:  # noqa: BLE001
@@ -252,7 +252,7 @@ def _llenar_control(ws, *, maestros, dias, celdas_por_maestro, corte, primera, u
     nombres.Font.Bold = False
     nombres.VerticalAlignment = XL_CENTER
     nombres.ShrinkToFit = True
-    for col, calcular in totales.items():
+    for col in totales:
         destino = _rango(ws, primera, col, fin, col)
         destino.HorizontalAlignment = XL_CENTER
         destino.VerticalAlignment = XL_CENTER

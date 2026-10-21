@@ -279,7 +279,8 @@ class ReportesView(QWidget):
         # Personal dado de baja solo sale si tuvo ponchadas o incidencias en la quincena.
         maestros = [
             m for m in maestros
-            if m.activo or any(c["tipo"] in ("completo", "incompleto", "incidencia") for c in celdas_por_maestro.get(m.id, []))
+            if any(c["tipo"] in ("completo", "incompleto", "incidencia") for c in celdas_por_maestro.get(m.id, []))
+            or (m.activo and self.active_report != "F02")  # en F02 solo salen los profesores que ponchan esa quincena
         ]
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:

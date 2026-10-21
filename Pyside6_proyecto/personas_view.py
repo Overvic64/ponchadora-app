@@ -260,7 +260,7 @@ class PersonasView(QWidget):
 
     def _clasificar_automaticamente(self):
         """Llena tipo, turno y area de quien no los tenga (nunca pisa lo ya capturado)."""
-        faltantes = [m for m in store.maestros if not m.tipo_personal or not m.turno or not m.area_carrera]
+        faltantes = [m for m in store.maestros if clasificador.le_falta_algo(m)]
         if not faltantes:
             QMessageBox.information(self, "Todo clasificado", "Todo el personal ya tiene tipo, turno y área.")
             return

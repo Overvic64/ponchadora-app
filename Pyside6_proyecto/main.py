@@ -445,7 +445,7 @@ class ProcessCard(QFrame):
         maestros = store.maestros
         total = len(maestros)
         sin_clasificar = sum(1 for m in maestros if not m.tipo_personal)
-        sin_turno = sum(1 for m in maestros if not m.turno)
+        sin_turno = sum(1 for m in maestros if not m.turno and m.tipo_personal != "Profesor de Asignatura")  # asignatura no tiene turno fijo
 
         if total == 0:
             paso_clasificar = ("Clasificar tipo de personal", "Todavía no hay empleados registrados.", False)
@@ -852,13 +852,13 @@ class MainWindow(QMainWindow):
         self._titular(nav_index)
         # El selector de arriba solo manda en estas pantallas; en las demas (Reportes tiene el suyo) confunde.
         self.topbar.mostrar_selector_quincena(nav_index in PAGINAS_CON_QUINCENA)
+        # Quincenas nuevas (recien importadas) aparecen en el selector sin importar a que pantalla se vaya.
+        self.topbar.set_quincenas(quincenas_disponibles())
         self.pages.setCurrentIndex(self.page_indices[nav_index])
         scroll = self.pages.currentWidget()
         page = scroll.widget()
         if hasattr(page, "refresh"):
             page.refresh()
-        if nav_index == 0:
-            self.topbar.set_quincenas(quincenas_disponibles())
 
 
 def _recursos_estilo() -> dict[str, str]:

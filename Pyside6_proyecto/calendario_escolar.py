@@ -1,8 +1,11 @@
-"""Calendario escolar oficial de la UTN (Calendario Escolar 2025, autorizado
-por Rectoria). Define que dias NO son laborables: dias inhabiles y periodos de
-descanso. Un dia sin ponchada en estas fechas no se cuenta como falta.
+"""Calendario escolar oficial de la UTN. Define que dias NO son laborables: dias
+inhabiles y periodos de descanso. Un dia sin ponchada en estas fechas no se cuenta
+como falta.
 
-Fuente: Calendario-1.pdf (pagina 2, "Dias Feriados" y "Periodos de Descanso").
+Fuentes: Calendario-1.pdf (Calendario Escolar 2025, pagina 2, "Dias Feriados" y
+"Periodos de Descanso") y Calendario-2 (Calendario Escolar 2026, enero a agosto).
+Septiembre a diciembre de 2026 todavia no se publica: se usan las mismas fechas
+que en 2025. Cuando salga, corregirlas aqui.
 Para un nuevo ciclo, agregar sus fechas aqui.
 """
 from __future__ import annotations
@@ -25,6 +28,21 @@ DIAS_INHABILES = {
     date(2025, 11, 17): "Día de la Revolución Mexicana",
     date(2026, 1, 5): "Sustitución por el 25 de diciembre",
     date(2026, 1, 6): "Sustitución por el 1 de enero",
+    # 2026 (Calendario Escolar 2026)
+    date(2026, 2, 2): "Día de la Constitución Mexicana",
+    date(2026, 2, 24): "Día de la Bandera",
+    date(2026, 3, 16): "Natalicio de Benito Juárez",
+    date(2026, 5, 1): "Día del Trabajo",
+    date(2026, 5, 5): "Batalla de Puebla",
+    date(2026, 5, 11): "Día de las Madres",
+    date(2026, 5, 15): "Día del Maestro",
+    date(2026, 7, 27): "Día del Servidor Público",
+    # septiembre a diciembre de 2026: mismas fechas que 2025 (pendiente el calendario oficial)
+    date(2026, 9, 15): "Día de la Independencia",
+    date(2026, 9, 16): "Día de la Independencia",
+    date(2026, 10, 13): "Descubrimiento de América",
+    date(2026, 11, 3): "Día de Muertos",
+    date(2026, 11, 17): "Día de la Revolución Mexicana",
 }
 
 PERIODOS_DESCANSO = [
@@ -33,11 +51,14 @@ PERIODOS_DESCANSO = [
     (date(2025, 4, 14), date(2025, 4, 25), "Vacaciones de Semana Santa"),
     (date(2025, 7, 14), date(2025, 7, 25), "Vacaciones de verano"),
     (date(2025, 12, 22), date(2026, 1, 2), "Vacaciones de invierno"),
+    (date(2026, 3, 30), date(2026, 4, 10), "Vacaciones de Semana Santa"),
+    (date(2026, 7, 13), date(2026, 7, 24), "Vacaciones de verano"),
+    (date(2026, 12, 22), date(2027, 1, 2), "Vacaciones de invierno"),  # igual que 2025 (pendiente el oficial)
 ]
 
 # Rango que cubre el calendario. Fuera de el no se sabe que dias son
 # inhabiles y se usa la regla de respaldo (dias casi sin ponchadas).
-COBERTURA = (date(2025, 1, 1), date(2026, 1, 31))
+COBERTURA = (date(2025, 1, 1), date(2026, 12, 31))
 
 
 def cubre(dia: date) -> bool:
