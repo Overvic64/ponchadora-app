@@ -26,10 +26,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from exportar_excel import _par, corte_entrada, excel_disponible, exportar_f01, exportar_f02, exportar_f05
-from report_data import etiqueta_quincena, generar_quincena, quincenas_disponibles, resumen_concentrado
-from store import store
+from exportar_excel import (
+    _par,
+    corte_entrada,
+    excel_disponible,
+    exportar_f01,
+    exportar_f02,
+    exportar_f05,
+)
 from iconos import con_icono, etiqueta_icono, icono
+from report_data import (
+    etiqueta_quincena,
+    generar_quincena,
+    quincenas_disponibles,
+    resumen_concentrado,
+)
+from store import store
 from theme import COLORS
 from widgets import size_table_to_contents
 
@@ -279,8 +291,8 @@ class ReportesView(QWidget):
         # Personal dado de baja solo sale si tuvo ponchadas o incidencias en la quincena.
         maestros = [
             m for m in maestros
-            if any(c["tipo"] in ("completo", "incompleto", "incidencia") for c in celdas_por_maestro.get(m.id, []))
-            or (m.activo and self.active_report != "F02")  # en F02 solo salen los profesores que ponchan esa quincena
+            if any(c["tipo"] in ("completo", "incompleto", "incidencia", "falta") for c in celdas_por_maestro.get(m.id, []))
+            or (m.activo and self.active_report != "F02")  # en F02 solo salen los profesores con ponchada, incidencia o falta por clase
         ]
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -301,7 +313,7 @@ class ReportesView(QWidget):
         QApplication.restoreOverrideCursor()
         abrir = QMessageBox.question(self, "Exportado", f"Reporte guardado en:\n{path}\n\n¿Abrirlo ahora?")
         if abrir == QMessageBox.Yes:
-            os.startfile(path)  # noqa: S606 - abre el archivo con Excel
+            os.startfile(path)
 
     def _exportar_simple(self, path, anio, mes, mitad):
         headers = [self.table.horizontalHeaderItem(c).text() for c in range(self.table.columnCount())]

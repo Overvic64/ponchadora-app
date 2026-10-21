@@ -34,9 +34,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from report_data import business_days, etiqueta_quincena, generar_quincena, quincenas_disponibles
-from store import TIPOS_INCIDENCIA, calcular_retardo, store
 from iconos import con_icono
+from report_data import (
+    business_days,
+    etiqueta_quincena,
+    generar_quincena,
+    quincenas_disponibles,
+)
+from store import TIPOS_INCIDENCIA, calcular_retardo, store
 from theme import COLORS
 from widgets import SectionTitle, size_table_to_contents
 
@@ -591,8 +596,13 @@ class IncidenciasView(QWidget):
         for r in retardos:
             dia = date.fromisoformat(r["fecha"])
             opciones.append(
-                (dia, f"{DIAS_CORTOS[dia.weekday()]} {_fecha_corta(dia)} — entró {(r.get('entrada') or '')[:8]} "
-                      f"({r['retardo_minutos_referencia']} min)")
+                (
+                    dia,
+                    (
+                        f"{DIAS_CORTOS[dia.weekday()]} {_fecha_corta(dia)} — entró {(r.get('entrada') or '')[:8]} "
+                        f"({r['retardo_minutos_referencia']} min)"
+                    ),
+                )
             )
         dialog = JustificarDialog("Justificar retardo", maestro.nombre, opciones, None, True, self)
         if dialog.exec() != QDialog.Accepted:

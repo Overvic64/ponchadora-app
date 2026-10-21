@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 """
 Sistema de Control de Asistencia y Ponchador
 """
@@ -5,7 +7,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QValueAxis
+from PySide6.QtCharts import (
+    QBarCategoryAxis,
+    QBarSeries,
+    QBarSet,
+    QChart,
+    QChartView,
+    QValueAxis,
+)
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
@@ -39,17 +48,17 @@ except Exception as error:  # noqa: BLE001 - sin .env, sin internet, claves mala
     )
     sys.exit(1)
 
-from asistencias_view import AsistenciasView  # noqa: E402
-from configuracion_view import ConfiguracionView  # noqa: E402
-from iconos import con_icono, etiqueta_icono, icono  # noqa: E402
-from importar_view import ImportarExcelView  # noqa: E402
-from incidencias_view import IncidenciasView  # noqa: E402
-from limpieza_view import LimpiezaView  # noqa: E402
-from personas_view import PersonasView  # noqa: E402
-from report_data import etiqueta_quincena, quincenas_disponibles, resumen_global  # noqa: E402
-from reportes_view import ReportesView  # noqa: E402
-from theme import COLORS  # noqa: E402
-from widgets import SectionTitle, StatCard, con_sombra  # noqa: E402
+from asistencias_view import AsistenciasView
+from configuracion_view import ConfiguracionView
+from iconos import con_icono, etiqueta_icono, icono
+from importar_view import ImportarExcelView
+from incidencias_view import IncidenciasView
+from limpieza_view import LimpiezaView
+from personas_view import PersonasView
+from report_data import etiqueta_quincena, quincenas_disponibles, resumen_global
+from reportes_view import ReportesView
+from theme import COLORS
+from widgets import SectionTitle, StatCard, con_sombra
 
 NAV_ITEMS = [
     ("inicio", "Inicio"),
@@ -340,7 +349,7 @@ class IncidenciasChartCard(QFrame):
 class WorkflowCard(QFrame):
     """Los tres pasos de siempre, como botones: el usuario nuevo sabe por donde empezar."""
 
-    PASOS = [
+    PASOS: ClassVar[list] = [
         ("importar", "Importa las ponchadas", "Sube el Excel del lector biométrico", 1),
         ("incidencias", "Revisa retardos y faltas", "Justifica permisos y cambios de turno", 4),
         ("reportes", "Exporta los reportes", "F01, F02 y F05 listos para imprimir", 5),
@@ -513,7 +522,7 @@ class ReportChip(QFrame):
 
 
 class ReportsCard(QFrame):
-    CHIPS = [
+    CHIPS: ClassVar[list] = [
         ("Concentrado Incidencias\nAdministrativo y PTC", "F05"),
         ("Control Quincenal\nProfesor de Asignatura", "F02"),
         ("Control Quincenal\nAdministrativos y PTC", "F01"),
@@ -566,7 +575,7 @@ class TypeBadge(QWidget):
 
 
 class RecordsTable(QFrame):
-    HEADERS = ["Fecha", "Empleado", "Tipo", "Entrada", "Salida", "Retardo (min)", "Observaciones"]
+    HEADERS: ClassVar[list] = ["Fecha", "Empleado", "Tipo", "Entrada", "Salida", "Retardo (min)", "Observaciones"]
 
     def __init__(self, filas, parent=None):
         super().__init__(parent)

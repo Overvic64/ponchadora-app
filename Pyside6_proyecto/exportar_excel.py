@@ -11,9 +11,10 @@ usa su exportacion simple.
 """
 from __future__ import annotations
 
+import contextlib
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from report_data import MESES, _ultimo_dia_mes, resumen_concentrado
 
@@ -123,10 +124,8 @@ class _Excel:
         import pythoncom
         import win32com.client
 
-        try:
+        with contextlib.suppress(Exception):  # ya estaba inicializado en este hilo
             pythoncom.CoInitialize()
-        except Exception:  # noqa: BLE001 - ya estaba inicializado en este hilo
-            pass
         self.app = win32com.client.DispatchEx("Excel.Application")
         self.app.Visible = False
         self.app.DisplayAlerts = False
@@ -135,10 +134,8 @@ class _Excel:
         return self.app
 
     def __exit__(self, *_):
-        try:
+        with contextlib.suppress(Exception):
             self.app.Quit()
-        except Exception:  # noqa: BLE001
-            pass
         return False
 
 
@@ -152,7 +149,7 @@ def _guardar(wb, ruta) -> None:
 
 
 def _nombre_hoja(area: str, usados: set[str]) -> str:
-    base = re.sub(r"[\[\]:*?/\\]", " ", area).strip()[:28] or "Hoja"
+    base = re.sub(r"[\[\]:*?/\\]", " ", area).strip()[:29] or "Hoja"
     nombre, n = base, 2
     while nombre.lower() in usados:
         nombre = f"{base} {n}"

@@ -6,7 +6,7 @@ en lugar de mutar el diccionario local.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QTime, Qt
+from PySide6.QtCore import Qt, QTime
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,

@@ -6,6 +6,8 @@ marcados como "Sin clasificar", para que se les pueda asignar desde aqui.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
@@ -13,11 +15,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -29,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 import clasificador
+import horarios_clase
 from iconos import con_icono, icono
 from store import EDIFICIOS, TIPOS_PERSONAL, TURNOS, store
 from theme import COLORS
@@ -61,7 +66,7 @@ class EditarPersonaDialog(QDialog):
 
         self.turno_combo = QComboBox()
         self.turno_combo.addItem(SIN_TURNO)
-        self.turno_combo.addItems([t.capitalize() for t in TURNOS.keys()])
+        self.turno_combo.addItems([t.capitalize() for t in TURNOS])
         self.turno_combo.setCurrentText(persona.turno.capitalize() if persona.turno else SIN_TURNO)
 
         self.activo_check = QCheckBox("Sigue trabajando aquí (si lo desmarcas, deja de contar faltas)")
@@ -105,6 +110,57 @@ class EditarPersonaDialog(QDialog):
         }
 
 
+class HorarioDialog(QDialog):
+    """Horario semanal de clases de una persona (una pestana-combo por carrera/cuatrimestre)."""
+
+    def __init__(self, persona, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Horario — {persona.nombre}")
+        self.setMinimumSize(860, 460)
+        bloques = store.horarios.get(persona.id, [])
+        self.grupos: dict[str, list[dict]] = {}
+        for b in bloques:
+            self.grupos.setdefault(f"{b['carrera']} · {b['periodo']}", []).append(b)
+
+        self.combo = QComboBox()
+        self.combo.addItems(self.grupos)
+        self.combo.currentTextChanged.connect(self._mostrar)
+        self.tabla = QTableWidget(0, 5)
+        self.tabla.setHorizontalHeaderLabels(horarios_clase.DIAS)
+        self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabla.verticalHeader().setVisible(False)
+        self.tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabla.setSelectionMode(QTableWidget.NoSelection)
+        self.resumen = QLabel("")
+        self.resumen.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.combo)
+        layout.addWidget(self.tabla)
+        layout.addWidget(self.resumen)
+        self._mostrar(self.combo.currentText())
+
+    def _mostrar(self, clave: str):
+        bloques = self.grupos.get(clave, [])
+        inicios = sorted({b["hora_inicio"][:5] for b in bloques})
+        self.tabla.setRowCount(len(inicios))
+        self.tabla.setVerticalHeaderLabels(inicios)
+        self.tabla.verticalHeader().setVisible(True)
+        for b in bloques:
+            texto = f"{b['hora_inicio'][:5]}–{b['hora_fin'][:5]}\n" + " ".join(filter(None, [b["grupo"], b["materia"]]))
+            if b["nota"]:
+                texto += f"\n({b['nota']})"
+            item = QTableWidgetItem(texto)
+            if b["tipo"] == "clase":
+                negrita = QFont()
+                negrita.setBold(True)
+                item.setFont(negrita)
+            self.tabla.setItem(inicios.index(b["hora_inicio"][:5]), b["dia"] - 1, item)
+        self.tabla.resizeRowsToContents()
+        clases = sum(b["tipo"] == "clase" for b in bloques)
+        self.resumen.setText(f"{clases} bloque(s) de clase (en negritas) y {len(bloques) - clases} de apoyo académico (tutoría, asesorías, gestión del curso...).")
+
+
 class PersonasView(QWidget):
     def __init__(self, titulo: str, tipos_permitidos: list[str], parent=None):
         super().__init__(parent)
@@ -146,7 +202,7 @@ class PersonasView(QWidget):
         self.area_input.setPlaceholderText("Área / Dirección / Carrera")
 
         self.turno_combo = QComboBox()
-        self.turno_combo.addItems([t.capitalize() for t in TURNOS.keys()])
+        self.turno_combo.addItems([t.capitalize() for t in TURNOS])
 
         grid.addWidget(self._label("Nombre"), 0, 0)
         grid.addWidget(self.nombre_input, 1, 0)
@@ -201,6 +257,13 @@ class PersonasView(QWidget):
         auto_btn.setToolTip("Deduce tipo, turno y área de quien no los tenga, con sus ponchadas y su edificio")
         auto_btn.clicked.connect(self._clasificar_automaticamente)
         list_header.addWidget(auto_btn)
+
+        horarios_btn = con_icono(QPushButton("Importar horarios"), "calendario")
+        horarios_btn.setObjectName("secondaryButton")
+        horarios_btn.setCursor(Qt.PointingHandCursor)
+        horarios_btn.setToolTip("Asigna a cada profesor el horario de clases de los Excel 'Horario de Clases por profesor'")
+        horarios_btn.clicked.connect(self._importar_horarios)
+        list_header.addWidget(horarios_btn)
         list_layout.addLayout(list_header)
 
         self.pendientes_label = QLabel("")
@@ -208,9 +271,9 @@ class PersonasView(QWidget):
         self.pendientes_label.setWordWrap(True)
         list_layout.addWidget(self.pendientes_label)
 
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Nombre", "Código", "Tipo", "Edificio", "Área / Carrera", "Turno", "", ""]
+            ["Nombre", "Código", "Tipo", "Edificio", "Área / Carrera", "Turno", "", "", ""]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -219,7 +282,7 @@ class PersonasView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        for col, width in ((6, 76), (7, 44)):
+        for col, width in ((6, 44), (7, 76), (8, 44)):
             self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
         self.table.verticalHeader().setDefaultSectionSize(34)
@@ -281,6 +344,42 @@ class PersonasView(QWidget):
         self.refresh()
         extra = f"\n\nRespaldo previo: {respaldo.name}" if respaldo else ""
         QMessageBox.information(self, "Clasificación terminada", f"{clasificador.resumen(propuestas)}.{extra}")
+
+    def _importar_horarios(self):
+        if not store.horarios_disponible:
+            QMessageBox.warning(
+                self, "Falta crear la tabla",
+                "Antes corre el archivo horarios_clase.sql en el SQL Editor de Supabase (una sola vez) y vuelve a abrir el programa.",
+            )
+            return
+        rutas, _ = QFileDialog.getOpenFileNames(self, "Horarios de clase por profesor", "", "Excel (*.xlsx)")
+        archivos = []
+        for ruta in rutas:
+            carrera = horarios_clase.carrera_del_archivo(ruta)
+            if not carrera:
+                carrera, ok = QInputDialog.getText(self, "Carrera", f"¿De qué carrera es '{Path(ruta).name}'? (ej. TI, MEC)")
+                if not ok or not carrera.strip():
+                    continue
+            archivos.append((ruta, carrera.strip().upper()))
+        if not archivos:
+            return
+        try:
+            res = horarios_clase.importar(archivos, store)
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "No se pudieron importar los horarios", str(error))
+            return
+        self.refresh()
+        texto = f"Se asignaron {len(res['asignados'])} horario(s)."
+        if res["sin_pareja"]:
+            texto += "\n\nNo se encontró en la base a: " + "; ".join(res["sin_pareja"])
+        if res["cambian_tipo"]:
+            texto += "\n\nLa hoja los firma con otro tipo de personal (no se cambió nada):\n" + "\n".join(res["cambian_tipo"])
+        QMessageBox.information(self, "Horarios importados", texto)
+
+    def _ver_horario(self, maestro_id):
+        persona = next((m for m in store.maestros if m.id == maestro_id), None)
+        if persona is not None:
+            HorarioDialog(persona, self).exec()
 
     def _eliminar(self, maestro_id):
         confirm = QMessageBox.question(
@@ -344,13 +443,24 @@ class PersonasView(QWidget):
                     item.setFont(font)
                 self.table.setItem(row, col, item)
 
+            if store.horarios.get(persona.id):
+                horario_btn = con_icono(QPushButton(), "calendario")
+                horario_btn.setObjectName("tableButton")
+                horario_btn.setCursor(Qt.PointingHandCursor)
+                horario_btn.setFixedSize(34, 28)
+                horario_btn.setToolTip("Ver horario de clases")
+                horario_btn.clicked.connect(lambda _, pid=persona.id: self._ver_horario(pid))
+                self.table.setCellWidget(row, 6, horario_btn)
+            else:
+                self.table.removeCellWidget(row, 6)
+
             edit_btn = QPushButton("Editar")
             edit_btn.setObjectName("tableButton")
             edit_btn.setCursor(Qt.PointingHandCursor)
             edit_btn.setFixedWidth(64)
             edit_btn.setToolTip("Editar / clasificar")
             edit_btn.clicked.connect(lambda _, pid=persona.id: self._editar(pid))
-            self.table.setCellWidget(row, 6, edit_btn)
+            self.table.setCellWidget(row, 7, edit_btn)
 
             delete_btn = con_icono(QPushButton(), "eliminar")
             delete_btn.setObjectName("tableButton")
@@ -358,5 +468,5 @@ class PersonasView(QWidget):
             delete_btn.setFixedSize(34, 28)
             delete_btn.setToolTip("Eliminar")
             delete_btn.clicked.connect(lambda _, pid=persona.id: self._eliminar(pid))
-            self.table.setCellWidget(row, 7, delete_btn)
+            self.table.setCellWidget(row, 8, delete_btn)
         size_table_to_contents(self.table)

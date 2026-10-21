@@ -7,6 +7,8 @@ store.maestros por maestro_id.
 """
 from __future__ import annotations
 
+from typing import ClassVar
+
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -21,9 +23,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from iconos import icono
 from report_data import business_days, etiqueta_quincena, quincenas_disponibles
 from store import EDIFICIOS, TIPOS_PERSONAL, store
-from iconos import icono
 from theme import COLORS
 from widgets import size_table_to_contents
 
@@ -61,7 +63,7 @@ def _load_rows(fecha_inicio=None, fecha_fin=None):
 
 
 class AsistenciasView(QWidget):
-    HEADERS = ["Fecha", "Empleado", "Edificio", "Tipo", "Turno", "Entrada", "Salida", "Retardo (min)", "Estado"]
+    HEADERS: ClassVar[list] = ["Fecha", "Empleado", "Edificio", "Tipo", "Turno", "Entrada", "Salida", "Retardo (min)", "Estado"]
 
     def __init__(self, parent=None):
         super().__init__(parent)

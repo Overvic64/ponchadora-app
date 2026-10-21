@@ -92,6 +92,23 @@ def business_days(anio: int, mes: int, mitad: str) -> list[date]:
     ]
 
 
+def _periodo_cubre(periodo: str, dia: date) -> bool:
+    """'Septiembre - Diciembre de 2026' cubre del 1 de septiembre al 31 de diciembre de 2026.
+    Si el texto no se entiende, no cubre nada (mejor no marcar faltas que marcarlas de mas)."""
+    meses = [i for palabra in periodo.lower().replace("-", " ").split() for i, mes in enumerate(MESES) if mes and mes == palabra]
+    anio = [int(x) for x in periodo.split() if x.isdigit() and len(x) == 4]
+    return len(meses) == 2 and len(anio) == 1 and anio[0] == dia.year and meses[0] <= dia.month <= meses[1]
+
+
+def tiene_clase(maestro_id: str, dia: date) -> bool:
+    """True si el horario cargado de la persona le pone clase ese dia de la semana (solo bloques de clase,
+    no tutorias ni gestion) en un cuatrimestre que incluye la fecha."""
+    return any(
+        b["tipo"] == "clase" and b["dia"] == dia.weekday() + 1 and _periodo_cubre(b["periodo"], dia)
+        for b in store.horarios.get(maestro_id, [])
+    )
+
+
 def generar_quincena(maestros, anio: int, mes: int, mitad: str):
     """Regresa (dias, {maestro_id: [celda_por_dia]}) usando datos reales."""
     dias = business_days(anio, mes, mitad)
@@ -150,13 +167,14 @@ def generar_quincena(maestros, anio: int, mes: int, mitad: str):
                 elif (
                     fecha not in dias_laborables
                     or not maestro.activo
-                    or primera is None
-                    or fecha < primera
-                    or maestro.tipo_personal == "Profesor de Asignatura"
+                    or (
+                        not tiene_clase(maestro.id, dia)  # el horario de clases ya prueba que trabaja
+                        and (maestro.tipo_personal == "Profesor de Asignatura" or primera is None or fecha < primera)
+                    )
                 ):
                     # Dia inhabil, empleado dado de baja, todavia no trabajaba
-                    # ahi, o profesor de asignatura: solo va los dias que tiene
-                    # clase y no hay horario cargado para saber cuales son.
+                    # ahi, o profesor de asignatura sin clase ese dia (solo se le
+                    # cuenta falta con horario de clases cargado).
                     celdas.append({"dia": dia, "tipo": "no_aplica", "clave": "—"})
                 else:
                     celdas.append({"dia": dia, "tipo": "falta", "clave": "FI"})

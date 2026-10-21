@@ -105,6 +105,8 @@ class SupabaseStore:
         self.incidencias: list[Incidencia] = []
         self.cambios_turno: dict[tuple[str, str], CambioTurno] = {}
         self.cambios_turno_disponible = False
+        self.horarios: dict[str, list[dict]] = {}  # maestro_id -> bloques de clase (ver horarios_clase.sql)
+        self.horarios_disponible = False
         self.import_history: list[ImportRecord] = []
         self._quincenas_cache: list[tuple[int, int, str]] | None = None
         self._primera_ponchada: dict[str, str] = {}
@@ -118,6 +120,7 @@ class SupabaseStore:
         self._load_maestros()
         self._load_incidencias()
         self._load_cambios_turno()
+        self._load_horarios()
         self._load_import_history()
 
     def _load_edificios(self) -> None:
@@ -295,6 +298,32 @@ class SupabaseStore:
     def remove_cambio_turno(self, cambio_id: int) -> None:
         self.client.table("cambios_turno").delete().eq("id", cambio_id).execute()
         self.cambios_turno = {k: c for k, c in self.cambios_turno.items() if c.id != cambio_id}
+
+    # --- horarios de clase -------------------------------------------------
+    def _load_horarios(self) -> None:
+        try:
+            filas = []
+            while True:  # PostgREST entrega 1000 filas por llamada
+                lote = self.client.table("horarios_clase").select("*").order("id").range(len(filas), len(filas) + 999).execute().data
+                filas += lote
+                if len(lote) < 1000:
+                    break
+        except Exception:  # noqa: BLE001 - falta correr horarios_clase.sql todavia
+            self.horarios, self.horarios_disponible = {}, False
+            return
+        self.horarios_disponible = True
+        self.horarios = {}
+        for fila in filas:
+            self.horarios.setdefault(str(fila["maestro_id"]), []).append(fila)
+
+    def reemplazar_horarios(self, maestro_id: str, carrera: str, periodo: str, bloques: list[dict]) -> None:
+        """Deja como unico horario de esa persona/carrera/periodo el que se manda (se puede repetir sin duplicar)."""
+        maestro_id = str(maestro_id)
+        filas = [{**b, "maestro_id": maestro_id, "carrera": carrera, "periodo": periodo} for b in bloques]
+        self.client.table("horarios_clase").delete().eq("maestro_id", maestro_id).eq("carrera", carrera).eq("periodo", periodo).execute()
+        nuevas = self.client.table("horarios_clase").insert(filas).execute().data if filas else []
+        otras = [f for f in self.horarios.get(maestro_id, []) if (f["carrera"], f["periodo"]) != (carrera, periodo)]
+        self.horarios[maestro_id] = otras + nuevas
 
     def _tolerancia(self, fila: dict) -> int:
         turno = self.turnos.get(fila.get("turno_reporte") or "") or self.turnos.get(

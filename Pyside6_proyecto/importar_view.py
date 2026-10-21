@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -22,7 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 import clasificador
-from core.attendance_import import CleaningResult, InputFileError, process_attendance_file
+from core.attendance_import import (
+    CleaningResult,
+    InputFileError,
+    process_attendance_file,
+)
 from iconos import con_icono, etiqueta_icono
 from store import EDIFICIOS, store
 from theme import COLORS
@@ -108,7 +113,7 @@ class WarningBanner(QFrame):
 
 
 class PreviewTable(QTableWidget):
-    HEADERS = ["Fecha", "Código", "Nombre", "Entrada", "Salida"]
+    HEADERS: ClassVar[list] = ["Fecha", "Código", "Nombre", "Entrada", "Salida"]
 
     def __init__(self, parent=None):
         super().__init__(0, len(self.HEADERS), parent)
